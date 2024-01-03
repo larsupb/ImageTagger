@@ -14,23 +14,15 @@ process_symbol = u'\u21A9'
 backward_symbol = u'\u25C0'
 forward_symbol = u'\u25B6'
 
-
 dataset = ImageDataSet(None, False)
 
 
 def init_dataset(path, filter_missing_captions):
     global dataset
     dataset = ImageDataSet(path, filter_missing_captions)
+    if dataset.len() == 0:
+        return None
     return gr.Slider(maximum=dataset.len(), value=0, interactive=True)
-
-
-def load_index(index):
-    path = dataset.images[index]
-    image = Image.open(path)
-    caption_path = dataset.caption_paths[index]
-    caption_text = read_caption(caption_path)
-
-    return path, image, caption_text, index
 
 
 def read_caption(caption_path):
@@ -71,7 +63,7 @@ if __name__ == '__main__':
             button_open_dataset = gr.Button(value=process_symbol + " Open")
 
         with gr.Row():
-            slider = gr.Slider(minimum=-1, maximum=len(dataset.images) - 1, value=-1, label="Image Index", step=1)
+            slider = gr.Slider(minimum=-1, maximum=len(dataset.images) - 1, value=-1, label="Image index", step=1)
             slider_selected_value = gr.Number(visible=False)
             button_backward = gr.Button(value=backward_symbol, elem_id='open_folder_small')
             button_forward = gr.Button(value=forward_symbol, elem_id='open_folder_small')
@@ -82,14 +74,24 @@ if __name__ == '__main__':
                 image_display = gr.Image()
             with gr.Column():
                 gr.Markdown("Caption text")
-                caption_display = gr.Textbox(placeholder="Caption")
+                caption_display = gr.Textbox(label="Caption", placeholder="Enter caption here..", lines=10,
+                                             interactive=True)
 
         button_open_dir.click(get_folder_path, inputs=input_folder_path, outputs=input_folder_path)
         button_open_dataset.click(init_dataset, inputs=[input_folder_path, checkbox_only_missing_captions], outputs=slider)
 
         slider.change(save_caption, inputs=[caption_display, slider_selected_value], outputs=None)
-        slider.change(load_index, inputs=slider,
-                      outputs=[image_path, image_display, caption_display, slider_selected_value])
+
+        def load_index(index):
+            if type(index) is not int:
+                return None, None, None, None
+            path = dataset.images[index]
+            image = Image.open(path)
+            caption_path = dataset.caption_paths[index]
+            caption_text = read_caption(caption_path)
+            return path, image, caption_text, index
+        slider.change(load_index, inputs=slider, outputs=[image_path, image_display, caption_display,
+                                                          slider_selected_value])
 
         def navigate_backward(current_index) -> int:
             return max(current_index - 1, 0)
