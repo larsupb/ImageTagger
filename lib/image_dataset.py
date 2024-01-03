@@ -16,7 +16,7 @@ def is_caption_existing(path):
 class ImageDataSet:
     def __init__(self, path, only_missing_captions):
         self.images = []
-        self.caption_texts = []
+        self.caption_paths = []
         self.caption_texts = dict()
         if path is None:
             return

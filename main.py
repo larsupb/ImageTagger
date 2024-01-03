@@ -21,7 +21,7 @@ dataset = ImageDataSet(None, False)
 def init_dataset(path, filter_missing_captions):
     global dataset
     dataset = ImageDataSet(path, filter_missing_captions)
-    return 0
+    return gr.Slider(maximum=dataset.len(), value=0, interactive=True)
 
 
 def load_index(index):
@@ -36,17 +36,13 @@ def load_index(index):
 def read_caption(caption_path):
     caption_text = ""
     if not os.path.exists(caption_path):
-        with open(caption_path, 'w') as file:
-            file.write(caption_text)
+        with open(caption_path, 'w') as f:
+            f.write(caption_text)
     else:
-        with open(caption_path, 'r') as file:
-            caption_text = file.read()
-
+        with open(caption_path, 'r') as f:
+            caption_text = f.read()
     dataset.caption_texts[caption_path] = caption_text
     return caption_text
-
-
-
 
 
 css = ""
@@ -62,7 +58,7 @@ with gr.Blocks(css=css) as app:
         button_open_dataset = gr.Button(value=process_symbol + " Open")
 
     with gr.Row():
-        slider = gr.Slider(minimum=0, maximum=len(dataset.images) - 1, value=-1, label="Image Index", step=1)
+        slider = gr.Slider(minimum=-1, maximum=len(dataset.images) - 1, value=-1, label="Image Index", step=1)
         slider_selected_value = gr.Number(visible=False)
         button_backward = gr.Button(value=backward_symbol, elem_id='open_folder_small')
         button_forward = gr.Button(value=forward_symbol, elem_id='open_folder_small')
@@ -80,9 +76,11 @@ with gr.Blocks(css=css) as app:
         global dataset
 
         caption_path = dataset.caption_paths[old_value]
+        if caption_path not in dataset.caption_texts:
+            return
         if dataset.caption_texts[caption_path] != new_text:
-            with open(caption_path, 'w') as file:
-                file.write(new_text)
+            with open(caption_path, 'w') as f:
+                f.write(new_text)
 
 
     button_open_dir.click(get_folder_path, inputs=input_folder_path, outputs=input_folder_path)
