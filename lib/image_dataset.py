@@ -38,8 +38,12 @@ class ImageDataSet:
 
         self.caption_paths = [img_to_caption_path(f) for f in self.images]
 
-    def len(self):
-        return len(self.images)
+    def empty(self):
+        return len(self.images) == 0
 
     def mask_paths(self, index):
         return img_to_mask_path(self.images[index], self.masks_path)
+
+    def size(self):
+        return len(self.images) - 1
+
