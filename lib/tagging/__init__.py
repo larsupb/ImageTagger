@@ -1,0 +1,1 @@
+from .rag_tagger import generate_rag_caption
