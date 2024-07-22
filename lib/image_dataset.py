@@ -1,13 +1,16 @@
 import os
+from typing import List
 
 from config import CONFIG
+
 
 def is_image(f):
     return f.lower().endswith(('.jpg', '.jpeg', '.png', '.gif'))
 
 
-def img_to_caption_path(f):
-    return f.replace('.jpg', '.txt').replace('.jpeg', '.txt').replace('.png', '.txt').replace('.gif', '.txt')
+def img_to_caption_path(file_path):
+    # replace file extension with .txt
+    return os.path.splitext(file_path)[0] + ".txt"
 
 
 def img_to_mask_path(f, mask_path):
@@ -39,7 +42,7 @@ class ImageDataSet:
         self.mask_support = False
         self.masks_path = None
 
-    def load(self, path, masks_path, only_missing_captions):
+    def load(self, path, masks_path, only_missing_captions, subdirectories=False):
         self.image_paths = []
         self.caption_paths = []
         self.caption_texts = dict()
@@ -57,15 +60,21 @@ class ImageDataSet:
         if path is None:
             return
 
-        files = os.listdir(path)
-        if only_missing_captions:
-            image_paths_temp = []
+        image_paths_temp = []
+        for root, dirs, files in os.walk(path):
+            # skip subdirectories if parameter subdirectories is False
+            if not subdirectories and root != path:
+                continue
             for f in files:
-                if is_image(f) and not_filtered(f) and not is_caption_existing(os.path.join(path, f)):
-                    image_paths_temp.append(os.path.join(path, f))
-            self.image_paths = sorted(image_paths_temp)
-        else:
-            self.image_paths = sorted([os.path.join(path, f) for f in files if is_image(f) and not_filtered(f)])
+                full_path = os.path.join(root, f)
+                if only_missing_captions:
+                    if is_image(f) and not_filtered(f) and not is_caption_existing(full_path):
+                        image_paths_temp.append(full_path)
+                else:
+                    if is_image(f) and not_filtered(f):
+                        image_paths_temp.append(full_path)
+
+        self.image_paths = sorted(image_paths_temp)
 
         self.caption_paths = [img_to_caption_path(f) for f in self.image_paths]
 
@@ -100,16 +109,13 @@ class ImageDataSet:
     def read_caption_at(self, index):
         caption_path = self.caption_paths[index]
         caption_text = ""
-        if not os.path.exists(caption_path):
-            with open(caption_path, 'w') as f:
-                f.write(caption_text)
-        else:
+        if os.path.exists(caption_path):
             with open(caption_path, 'r') as f:
                 caption_text = f.read()
         self.caption_texts[caption_path] = caption_text
         return caption_text
 
-    def read_tags_at(self, index) -> list:
+    def read_tags_at(self, index) -> List[str]:
         caption = self.read_caption_at(index)
         # split the caption into tags
         tags = caption.split(",")
@@ -128,6 +134,9 @@ class ImageDataSet:
         if self.caption_texts[caption_path] != new_text:
             with open(caption_path, 'w') as f:
                 f.write(new_text)
+
+    def find_index(self, path):
+        return self.image_paths.index(path)
 
 
 INSTANCE = ImageDataSet()

@@ -27,6 +27,25 @@ def remove_selected_tags(remove_tags: List):
     return create_tag_cloud()
 
 
+def remove_duplicates():
+    for i in range(0, DATASET.size()):
+        tags = DATASET.read_tags_at(i)
+        tags = list(dict.fromkeys(tags))
+        caption_text = ", ".join(tags)
+        DATASET.save_caption(i, caption_text)
+    return create_tag_cloud()
+
+
+def replace_underscores():
+    for i in range(0, DATASET.size()):
+        caption_text = DATASET.read_caption_at(i)
+        caption_text = caption_text.replace("_", " ")
+        DATASET.save_caption(i, caption_text)
+
+        remove_duplicates()
+    return create_tag_cloud()
+
+
 def append_tag(tag: str):
     for i in range(0, DATASET.size()):
         caption_text = DATASET.read_caption_at(i)

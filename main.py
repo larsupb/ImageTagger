@@ -6,7 +6,7 @@ from PIL import Image
 from gradio.components.image_editor import EditorValue
 
 from lib.captioning import create_tag_cloud, remove_selected_tags, caption_search, caption_search_and_replace, \
-    prepend_tag, append_tag
+    prepend_tag, append_tag, remove_duplicates, replace_underscores
 from lib.common_gui import get_folder_path
 from lib.image_aspects import ImageAspects
 from lib.image_dataset import INSTANCE as DATASET
@@ -30,11 +30,9 @@ process_symbol = u'\u21A9'
 backward_symbol = u'\u25C0'
 forward_symbol = u'\u25B6'
 
-selected_index = -1
 
-
-def init_dataset(path: str, masks_path: str, filter_missing_captions, autogenerate_mask):
-    DATASET.load(path, masks_path, filter_missing_captions)
+def init_dataset(path: str, masks_path: str, filter_missing_captions, autogenerate_mask, subdirectories=False):
+    DATASET.load(path, masks_path, filter_missing_captions, subdirectories)
 
     new_index, path, caption, size, dimensions, image, image_mask, _ = navigate_forward(-1, None, autogenerate_mask)
     images_total = DATASET.size() - 1
@@ -43,8 +41,8 @@ def init_dataset(path: str, masks_path: str, filter_missing_captions, autogenera
 
 
 def load_index(index, auto_generate):
-    if type(index) is not int:
-        return None
+    if index < 0:
+        return
 
     path = DATASET.image_paths[index]
     mask_path = DATASET.mask_paths(index)
@@ -85,34 +83,43 @@ def load_index(index, auto_generate):
     if len(validation) == 0:
         validation = "All good."
 
-    selected_index = index
-
     return path, kbyte_size_str, dimensions, caption_text, img_edit, img_mask, validation
 
 
 def navigate_forward(current_index, caption_text, auto_generate_mask):
-    if caption_text is not None:
-        DATASET.save_caption(current_index, caption_text)
+    save_caption(current_index, caption_text)
 
     new_index = min(current_index + 1, DATASET.size() - 1)
+    if new_index < 0:
+        return None, None, None, None, None, None, None, None
+
     path, caption, size, dimensions, image, image_mask, validation = load_index(new_index, auto_generate_mask)
     return new_index, path, caption, size, dimensions, image, image_mask, validation
 
 
 def navigate_backward(current_index, caption_text, auto_generate_mask):
-    DATASET.save_caption(current_index, caption_text)
+    save_caption(current_index, caption_text)
 
     new_index = max(current_index - 1, 0)
+    if new_index < 0:
+        return None, None, None, None, None, None, None, None
+
     path, caption, size, dimensions, image, image_mask, validation = load_index(new_index, auto_generate_mask)
     return new_index, path, caption, size, dimensions, image, image_mask, validation
 
 
-def jump(new_index, caption_text, autogenerate_masks):
-    if caption_text is not None:
-        DATASET.save_caption(selected_index, caption_text)
+def jump(new_index, caption_text, file_name, autogenerate_masks):
+    save_caption(-1, caption_text, file_name)
 
     path, caption, image_size, image_dims, image, image_mask, validation = load_index(new_index, autogenerate_masks)
     return new_index, path, caption, image_size, image_dims, image, image_mask, validation
+
+
+def save_caption(index, caption_text, file_name=None):
+    if caption_text is not None:
+        if file_name is not None:
+            index = DATASET.find_index(file_name)
+        DATASET.save_caption(index, caption_text)
 
 
 def delete_image(current_index, auto_generate_mask):
@@ -129,7 +136,7 @@ def delete_image(current_index, auto_generate_mask):
     return slider_new, path, caption, size, dimensions, image, image_mask, validation, images_total
 
 
-def generate_caption(current_index, option, subject):
+def generate_caption(current_index, option):
     if not DATASET.initialized:
         return
     path = DATASET.image_paths[current_index]
@@ -144,11 +151,7 @@ def generate_caption(current_index, option, subject):
             caption = generate_multi_sbert(path, CONFIG.sbert_taggers(), CONFIG.sbert_threshold())
         else:
             caption = generate_rag_caption(path)
-
-        if subject is not None:
-            caption = f"{subject}, {caption}"
-        return caption
-    return
+    return caption
 
 
 def apply_mask_action(mask, image_dict: EditorValue):
@@ -164,11 +167,17 @@ def apply_mask_action(mask, image_dict: EditorValue):
     return image_dict
 
 
-def upscale_image_action(image_dict: EditorValue, progress=gr.Progress()) -> EditorValue:
+def upscale_image_action(image_dict: EditorValue, upscaler: str, progress=gr.Progress()) -> EditorValue:
     img = image_dict['background'].convert("RGB")
-    img_out = upscale_image(img, CONFIG.upscaler())
+    img_out = upscale_image(img, upscaler, progress=progress)
 
     image_dict['background'] = img_out
+    return image_dict
+
+
+def upscale_image_restore_action(index, image_dict: EditorValue) -> EditorValue:
+    img = Image.open(DATASET.image_paths[index])
+    image_dict['background'] = img
     return image_dict
 
 
@@ -180,7 +189,11 @@ def remove_background_action(image_dict) -> EditorValue:
 
 def save_image_action(index, image_dict):
     img = image_dict['background']
-    img.save(DATASET.image_paths[index])
+    img_path = DATASET.image_paths[index]
+
+    if not img_path.endswith('.png'):
+        img = img.convert('RGB')
+    img.save(img_path)
 
 
 def generate_mask(index) -> EditorValue:
@@ -210,7 +223,7 @@ def save_mask_action(index, editor_value: EditorValue):
     return None
 
 
-def batch_process(upscale, mask, captioning, subject, progress=gr.Progress(track_tqdm=True)):
+def batch_process(upscale, mask, captioning, progress=gr.Progress(track_tqdm=True)):
     log = ""
     for i in progress.tqdm(range(0, DATASET.size())):
         path, caption, size, dimensions, image, image_mask, validation = load_index(i, False)
@@ -223,8 +236,8 @@ def batch_process(upscale, mask, captioning, subject, progress=gr.Progress(track
             mask = ask_mask_from_model(image, 'u2net_human_seg')
             mask.save(DATASET.mask_paths(i))
         if captioning:
-            caption = generate_caption(i, 'multi_sbert', subject)
-            DATASET.save_caption(i, caption)
+            caption = generate_caption(i, 'multi_sbert')
+            save_caption(i, caption)
     return log
 
 
@@ -291,6 +304,8 @@ def tab_captions():
                     checkbox_tag_cloud = gr.CheckboxGroup(label="Tag cloud", )
                 with gr.Column():
                     button_remove_tags = gr.Button("Remove selected tags")
+                    button_remove_duplicates = gr.Button("Remove duplicates")
+                    button_replace_underscores = gr.Button("Replace underscores")
                     with gr.Row():
                         textbox_add_tag = gr.Textbox(placeholder="Enter a new tag", )
                         with gr.Row():
@@ -299,6 +314,8 @@ def tab_captions():
 
             button_create_tag_cloud.click(create_tag_cloud, outputs=checkbox_tag_cloud)
             button_remove_tags.click(remove_selected_tags, inputs=checkbox_tag_cloud, outputs=checkbox_tag_cloud)
+            button_remove_duplicates.click(remove_duplicates, outputs=checkbox_tag_cloud)
+            button_replace_underscores.click(replace_underscores, outputs=checkbox_tag_cloud)
             button_prepend_tag.click(prepend_tag, inputs=[textbox_add_tag], outputs=checkbox_tag_cloud)
             button_append_tag.click(append_tag, inputs=[textbox_add_tag], outputs=checkbox_tag_cloud)
 
@@ -336,7 +353,7 @@ def tab_batch():
                 textbox_processing = gr.Textbox(label="Log", placeholder="Log", lines=1, interactive=False)
                 button_batch_process = gr.Button(value=process_symbol + " Batch", elem_id="button_batch")
 
-            inputs = [checkbox_batch_upscale, checkbox_batch_mask, checkbox_batch_caption, textbox_subject]
+            inputs = [checkbox_batch_upscale, checkbox_batch_mask, checkbox_batch_caption]
             button_batch_process.click(batch_process, inputs=inputs, outputs=textbox_processing)
 
 
@@ -351,7 +368,7 @@ def tab_editing():
 
         with gr.Row():
             with gr.Column():
-                image_path_label = gr.Textbox(interactive=False, label="Image path")
+                textbox_image_path = gr.Textbox(interactive=False, label="Image path")
                 with gr.Row():
                     textbox_image_size = gr.Textbox(interactive=False, label="Size")
                     textbox_image_dimensions = gr.Textbox(interactive=False, label="Dimensions")
@@ -370,14 +387,19 @@ def tab_editing():
                                               brush=gr.Brush(default_size=50, default_color="#ff0000"),
                                               eraser=gr.Eraser(50))
                 with gr.Row():
-                    gr.Markdown("Modifications")
-                    button_remove_background = gr.Button(value="Remove background", elem_id='rem_bg')
-                    button_upscale = gr.Button(value="Upscale", elem_id='rem_bg')
-                    button_save_image = gr.Button(value="Save image " + save_style_symbol, elem_id='save_image')
-                with gr.Row():
-                    gr.Markdown("Mask")
-                    button_generate_mask = gr.Button(value="Generate mask " + refresh_symbol, elem_id='generate_mask', )
-                    button_save_mask = gr.Button(value="Save mask " + save_style_symbol, elem_id='save_mask')
+                    with gr.Accordion("Modifications"):
+                        button_remove_background = gr.Button(value="Remove background", elem_id='rem_bg')
+                        button_save_image = gr.Button(value="Save image " + save_style_symbol, elem_id='save_image')
+                with gr.Accordion("Upscale"):
+                    dropdown_upscaler = gr.Dropdown(label='Upscaler', choices=[upscaler.name for upscaler in Upscalers],
+                                value=CONFIG.upscaler(), show_label=True)
+                    with gr.Row():
+                        button_upscale = gr.Button(value="Upscale")
+                        button_upscale_restore = gr.Button(value="Restore")
+                with gr.Accordion("Masking"):
+                    with gr.Row():
+                        button_generate_mask = gr.Button(value="Generate mask " + refresh_symbol, elem_id='generate_mask', )
+                        button_save_mask = gr.Button(value="Save mask " + save_style_symbol, elem_id='save_mask')
             with gr.Column():
                 gr.Markdown("Mask")
                 image_mask_preview = gr.Image(interactive=False, label="Saved mask")
@@ -385,12 +407,12 @@ def tab_editing():
 
         button_open_dataset.click(init_dataset,
                                   inputs=[input_folder_path, mask_folder_path, checkbox_only_missing_captions,
-                                          checkbox_autogenerate_mask],
-                                  outputs=[slider, textbox_images_total, image_path_label,
+                                          checkbox_autogenerate_mask, checkbox_subdirectories],
+                                  outputs=[slider, textbox_images_total, textbox_image_path,
                                            textbox_image_size, textbox_image_dimensions, textbox_caption,
                                            image_editor, image_mask_preview])
 
-        control_output_group = [slider, image_path_label, textbox_image_size, textbox_image_dimensions, textbox_caption,
+        control_output_group = [slider, textbox_image_path, textbox_image_size, textbox_image_dimensions, textbox_caption,
                                 image_editor, image_mask_preview]
         button_backward.click(navigate_backward, inputs=[slider, textbox_caption, checkbox_autogenerate_mask],
                               outputs=control_output_group)
@@ -399,11 +421,14 @@ def tab_editing():
         button_delete.click(delete_image, inputs=[slider, checkbox_autogenerate_mask],
                             outputs=control_output_group + [textbox_images_total])
 
-        slider.input(jump, inputs=[slider, textbox_caption, checkbox_autogenerate_mask], outputs=control_output_group)
+        slider.input(jump, inputs=[slider, textbox_caption, textbox_image_path, checkbox_autogenerate_mask],
+                     outputs=control_output_group)
 
-        button_generate_caption.click(generate_caption, inputs=[slider, radio_engine, textbox_subject],
+        button_generate_caption.click(generate_caption, inputs=[slider, radio_engine],
                                       outputs=textbox_caption)
-        button_upscale.click(upscale_image_action, inputs=image_editor, outputs=image_editor)
+        button_upscale.click(upscale_image_action, inputs=[image_editor, dropdown_upscaler], outputs=image_editor)
+        button_upscale_restore.click(upscale_image_restore_action, inputs=[slider, image_editor], outputs=image_editor)
+
         button_remove_background.click(remove_background_action, inputs=image_editor, outputs=image_editor)
         button_save_image.click(save_image_action, inputs=[slider, image_editor])
 
@@ -432,11 +457,9 @@ if __name__ == '__main__':
                 button_open_masks_dir.click(get_folder_path, inputs=mask_folder_path, outputs=mask_folder_path)
 
             with gr.Row():
-                with gr.Column():
                     checkbox_only_missing_captions = gr.Checkbox(label="Only images missing captions", value=False)
+                    checkbox_subdirectories = gr.Checkbox(label="Include subdirectories", value=False)
                     checkbox_autogenerate_mask = gr.Checkbox(label="Auto-generate masks when missing", value=False)
-                with gr.Column():
-                    textbox_subject = gr.Textbox(label="Subject", placeholder="Subject or leave blank")
             with gr.Row():
                 button_open_dataset = gr.Button(value=process_symbol + " Open", elem_id="button_execute")
 
