@@ -2,55 +2,48 @@ import json
 import os
 
 
-class ConfigClass:
-    _instance = None
-
-    settings = dict()
-
-    def __new__(cls, *args, **kwargs):
-        if not cls._instance:
-            cls._instance = super(ConfigClass, cls).__new__(cls, *args, **kwargs)
-        return cls._instance
-
-    def __init__(self):
-        # open settings.json or create empty if not exists
-        if not os.path.exists("settings.json"):
-            json.dump({}, open("settings.json", "w"))
-        self.settings = json.load(open("settings.json", "r"))
-
-        if "sbert_taggers" not in self.settings:
-            self.settings["sbert_taggers"] = ['joytag', 'wd14', 'florence']
-        if "sbert_threshold" not in self.settings:
-            self.settings["sbert_threshold"] = 0.65
-        if "models_dir" not in self.settings:
-            self.settings['models_dir'] = 'models'
-        if "ignore_list" not in self.settings:
-            self.settings['ignore_list'] = ['masklabel']
-        if "upscaler" not in self.settings:
-            self.settings['upscaler'] = '4x_NMKD-Siax_200k.pth'
-
-        # save settings
-        json.dump(self.settings, open("settings.json", "w"))
-
-    def sbert_taggers(self):
-        return self.settings['sbert_taggers']
-
-    def sbert_threshold(self):
-        return self.settings['sbert_threshold']
-
-    def upscaler(self):
-        return self.settings['upscaler']
-
-    def models_dir(self):
-        return self.settings['models_dir']
-
-    def ignore_list(self):
-        return self.settings['ignore_list']
-
-    def update(self, key, value):
-        self.settings[key] = value
-        json.dump(self.settings, open("settings.json", "w"))
+def sbert_taggers(state_dict):
+    if "sbert_taggers" not in state_dict:
+        state_dict["sbert_taggers"] = ['joytag', 'wd14', 'florence']
+    return state_dict['sbert_taggers']
 
 
-CONFIG = ConfigClass()
+def sbert_threshold(state_dict):
+    if "sbert_threshold" not in state_dict:
+        state_dict["sbert_threshold"] = 0.7
+    return state_dict['sbert_threshold']
 
+
+def upscaler(state_dict):
+    if "upscaler" not in state_dict:
+        state_dict['upscaler'] = '4x_NMKD-Siax_200k.pth'
+    return state_dict['upscaler']
+
+
+def models_dir(state_dict):
+    if "models_dir" not in state_dict:
+        state_dict['models_dir'] = 'models'
+    return state_dict['models_dir']
+
+
+def ignore_list(state_dict):
+    if "ignore_list" not in state_dict:
+        state_dict["ignore_list"] = ['joytag', 'wd14', 'florence']
+    return state_dict['ignore_list']
+
+
+def update(state: dict, key, value):
+    state[key] = value
+    json.dump(state, open("settings.json", "w"))
+
+
+def read() -> dict:
+    if not os.path.exists("settings.json"):
+        json.dump({}, open("settings.json", "w"))
+    return json.load(open("settings.json", "r"))
+
+
+def tagger_instruction(state_dict):
+    if "tagger_instruction" not in state_dict:
+        state_dict["tagger_instruction"] = "A descriptive caption for this image:\n"
+    return state_dict["tagger_instruction"]

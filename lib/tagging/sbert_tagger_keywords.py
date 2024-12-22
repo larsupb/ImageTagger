@@ -1,10 +1,10 @@
 from typing import List
 
 import torch
-from sentence_transformers import SentenceTransformer, util
+#from sentence_transformers import SentenceTransformer, util
 from sklearn.metrics.pairwise import cosine_similarity
 from lib.tagging.joytag.joytag import generate_joytag_caption
-from lib.tagging.tagging import generate_florence_caption
+from lib.tagging.florence_tagger import generate_florence_caption
 from lib.tagging.wd14_tagger import generate_wd14_caption
 
 
@@ -61,36 +61,38 @@ def generate_multi_sbert(image_path, taggers: List, threshold=.8):
         keywords.update(split)
 
     # Load the Sentence-BERT model
-    model = SentenceTransformer('paraphrase-MiniLM-L6-v2')
-
-    # Generate embeddings for each keyword
-    embeddings = model.encode(list(keywords))
-
-    # Compute cosine similarity matrix
-    cosine_sim_matrix = util.cos_sim(embeddings, embeddings).numpy()
-
-    # Find and group similar keywords
-    similar_groups = {}
-    for i, word in enumerate(keywords):
-        similar_groups[word] = []
-        for j, other_word in enumerate(keywords):
-            if i != j and cosine_sim_matrix[i][j] >= threshold:
-                similar_groups[word].append(other_word)
-
-    # Group similar keywords by merging overlapping groups
-    grouped_keywords = {}
-    visited = set()
-
-    for word, similar_words in similar_groups.items():
-        if word not in visited:
-            group = [word] + similar_words
-            for w in group:
-                visited.add(w)
-            representative = word  # Choose the first word as the representative
-            grouped_keywords[representative] = group
-    print(grouped_keywords)
-
-    # Generate the final caption based on the grouped keywords keys
-    final_caption = ', '.join(grouped_keywords.keys())
-    return final_caption
+    # TODO Reativate
+    # model = SentenceTransformer('paraphrase-MiniLM-L6-v2')
+    #
+    # # Generate embeddings for each keyword
+    # embeddings = model.encode(list(keywords))
+    #
+    # # Compute cosine similarity matrix
+    # cosine_sim_matrix = util.cos_sim(embeddings, embeddings).numpy()
+    #
+    # # Find and group similar keywords
+    # similar_groups = {}
+    # for i, word in enumerate(keywords):
+    #     similar_groups[word] = []
+    #     for j, other_word in enumerate(keywords):
+    #         if i != j and cosine_sim_matrix[i][j] >= threshold:
+    #             similar_groups[word].append(other_word)
+    #
+    # # Group similar keywords by merging overlapping groups
+    # grouped_keywords = {}
+    # visited = set()
+    #
+    # for word, similar_words in similar_groups.items():
+    #     if word not in visited:
+    #         group = [word] + similar_words
+    #         for w in group:
+    #             visited.add(w)
+    #         representative = word  # Choose the first word as the representative
+    #         grouped_keywords[representative] = group
+    # print(grouped_keywords)
+    #
+    # # Generate the final caption based on the grouped keywords keys
+    # final_caption = ', '.join(grouped_keywords.keys())
+    #return final_caption
+    return None
 

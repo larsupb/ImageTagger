@@ -9,7 +9,7 @@ from PIL.Image import Image
 from lib.upscaling.util import image_to_tensor, tensor_to_image
 
 
-def upscale_image_spandrel(image: Image, model_path, progress=None):
+def upscale_image_spandrel(image: Image, model_path, upscale_factor=4, progress=None):
     # Load the model
     loader = spandrel.ModelLoader()
     model = loader.load_from_file(model_path)
@@ -25,7 +25,8 @@ def upscale_image_spandrel(image: Image, model_path, progress=None):
 
     # use the model
     with torch.no_grad():
-        out = tiled_scale(image_tensor, model, tile_x=64, tile_y=64, overlap=8, upscale_amount=4, out_channels=3,
+        out = tiled_scale(image_tensor, model, tile_x=64, tile_y=64, overlap=8, upscale_amount=upscale_factor,
+                          out_channels=3,
                           progress=progress)
 
     out = torch.clamp(out, min=0, max=1.0)

@@ -3,7 +3,7 @@ import os
 import numpy as np
 from PIL import Image
 
-from config import CONFIG
+import config
 
 
 def ask_mask_from_model(image, model):
@@ -31,9 +31,9 @@ def ask_mask_from_model(image, model):
     return img_out
 
 
-def remove_background(image, model):
+def remove_background(image, model, state_dict: dict):
     import rembg
-    os.environ['U2NET_HOME'] = os.path.join(CONFIG.models_dir(), 'rembg')
+    os.environ['U2NET_HOME'] = os.path.join(config.models_dir(state_dict), 'rembg')
     os.makedirs(os.environ['U2NET_HOME'], exist_ok=True)
 
     img_out = rembg.remove(image, post_process_mask=True, session=rembg.new_session(model), only_mask=False)

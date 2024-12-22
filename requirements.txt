@@ -20,3 +20,5 @@ pandas
 huggingface-hub
 onnxruntime
 scikit-learn
+SentencePiece
+jsonformer

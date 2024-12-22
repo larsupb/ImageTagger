@@ -1,16 +1,15 @@
+import os
+
 import torch
 import torch.amp.autocast_mode
 import torchvision.transforms.functional as TVF
-from PIL import Image
+from huggingface_hub import snapshot_download
 
+from PIL import Image
 from lib.tagging.joytag.joytag_model import VisionModel
 
-path = '/home/lars/SD/models/tagging/joytag'  # Change this to where you downloaded the model
 THRESHOLD = 0.4
-
-
-with open('top_tags.txt', 'r') as f:
-    top_tags = [line.strip() for line in f.readlines() if line.strip()]
+MODEL_PATH = 'models/taggers/joytag'
 
 
 def prepare_image(image: Image.Image, target_size: int) -> torch.Tensor:
@@ -39,7 +38,9 @@ def prepare_image(image: Image.Image, target_size: int) -> torch.Tensor:
 
 @torch.no_grad()
 def predict(image: Image.Image):
-    model = VisionModel.load_model(path)
+    snapshot_download('fancyfeast/joytag', local_dir=MODEL_PATH)
+
+    model = VisionModel.load_model(MODEL_PATH)
     model.eval()
     model = model.to('cuda')
 
@@ -51,6 +52,10 @@ def predict(image: Image.Image):
     with torch.amp.autocast_mode.autocast('cuda', enabled=True):
         preds = model(batch)
         tag_preds = preds['tags'].sigmoid().cpu()
+
+    # Load top tags
+    with open(os.path.join(MODEL_PATH, 'top_tags.txt'), 'r') as f:
+        top_tags = [line.strip() for line in f.readlines() if line.strip()]
 
     scores = {top_tags[i]: tag_preds[0][i] for i in range(len(top_tags))}
     predicted_tags = [tag for tag, score in scores.items() if score > THRESHOLD]
