@@ -46,7 +46,7 @@ if __name__ == '__main__':
             control_output_group += tab_editing(state, gallery)
             gallery_2 = tab_captions()
             tab_validate()
-            tab_batch(state)
+            batch_dependency = tab_batch(state)
             tab_settings(state)
 
             def on_gallery_click(data: gr.EventData):
@@ -60,5 +60,9 @@ if __name__ == '__main__':
                              inputs=[input_folder_path, mask_folder_path,
                                      cb_only_missing_captions, cb_subdirectories, cb_load_gallery, state],
                              outputs=[gallery] + control_output_group)
+        # Force reloading the dataset when batch processing took place
+        batch_dependency.then(init_dataset, inputs=[input_folder_path, mask_folder_path,
+                                                    cb_only_missing_captions, cb_subdirectories, cb_load_gallery, state],
+                              outputs=[gallery] + control_output_group)
     app.launch()
 

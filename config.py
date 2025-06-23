@@ -2,6 +2,12 @@ import json
 import os
 
 
+def combo_taggers(state_dict):
+    if "combo_taggers" not in state_dict:
+        state_dict["combo_taggers"] = ['florence', 'wd14']
+    return state_dict['combo_taggers']
+
+
 def sbert_taggers(state_dict):
     if "sbert_taggers" not in state_dict:
         state_dict["sbert_taggers"] = ['joytag', 'wd14', 'florence']
@@ -13,6 +19,11 @@ def sbert_threshold(state_dict):
         state_dict["sbert_threshold"] = 0.7
     return state_dict['sbert_threshold']
 
+
+def florence_settings(state_dict):
+    if "florence_settings" not in state_dict:
+        state_dict["florence_settings"] = {'prompt': '<DETAILED_CAPTION>'}
+    return state_dict['florence_settings']
 
 def upscaler(state_dict):
     if "upscaler" not in state_dict:
@@ -47,3 +58,9 @@ def tagger_instruction(state_dict):
     if "tagger_instruction" not in state_dict:
         state_dict["tagger_instruction"] = "A descriptive caption for this image:\n"
     return state_dict["tagger_instruction"]
+
+
+def rembg(state_dict):
+    if "rembg" not in state_dict:
+        state_dict["rembg"] = {"model": "u2net_human_seg"}
+    return state_dict["rembg"]

@@ -10,6 +10,8 @@ from transformers import AutoModel, AutoProcessor, AutoTokenizer, PreTrainedToke
 from pathlib import Path
 from PIL import Image
 
+from lib.image_dataset import load_media
+
 CLIP_PATH = "google/siglip-so400m-patch14-384"
 LLM_ID = "hugging-quants/Meta-Llama-3.1-8B-Instruct-GPTQ-INT4"  # hugging-quants/Meta-Llama-3.1-8B-GPTQ-INT4"
 CHECKPOINT_PATH = Path("models/taggers/joycaption/wpkklhc6")
@@ -133,6 +135,7 @@ class JoyCaptioning:
             url = "https://huggingface.co/spaces/fancyfeast/joy-caption-pre-alpha/resolve/main/wpkklhc6/image_adapter.pt"
             download(url, os.path.join(self.CHECKPOINT_PATH, "image_adapter.pt"))
 
+
 class ImageAdapter(torch.nn.Module):
     def __init__(self, input_features: int, output_features: int):
         super().__init__()
@@ -170,12 +173,11 @@ def download(url, file_path):
     with open(file_path, "wb") as f:
         f.write(r.content)
 
+
 def generate_joycaption_caption(image_path: str, instruction: str):
-    image = Image.open(image_path)
+    image = load_media(image_path)
     captioning = JoyCaptioning()
     captioning.load_model('cuda', 'cpu')
     caption = captioning.predict(image, instruction)
     captioning.cleanup()
     return caption
-
-

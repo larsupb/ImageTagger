@@ -9,7 +9,7 @@ from lib.image_aspects import ImageAspects
 from lib.image_dataset import INSTANCE as DATASET
 
 
-def validate_dataset(aspect_ratios):
+def validate_dataset(aspect_ratios=None):
     if aspect_ratios is not None and len(aspect_ratios) > 0:
         aspects = [ImageAspects.from_code(a) for a in aspect_ratios]
     else:

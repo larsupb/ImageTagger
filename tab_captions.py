@@ -5,7 +5,7 @@ import pandas as pd
 from typing import List
 from PIL import Image
 from ui_symbols import process_symbol
-from lib.image_dataset import INSTANCE as DATASET
+from lib.image_dataset import INSTANCE as DATASET, load_media
 
 
 def create_tag_cloud(sort_by: str):
@@ -123,10 +123,10 @@ def refresh_thumbnails(tags: list, inverse: bool):
         # if any element of tags is in image_tags, create a gr.Image object
         if not inverse and any(tag in image_tags for tag in tags):
             # read image as PIL.Image and add it to the list
-            image_controls.append(Image.open(img_path))
+            image_controls.append(load_media(img_path))
         # if inverse mode and none of the elements of tags is in image_tags, create a gr.Image object
         if inverse and all(tag not in image_tags for tag in tags):
-            image_controls.append(Image.open(img_path))
+            image_controls.append(load_media(img_path))
 
     DATASET.scan(check_relevance)
     return image_controls

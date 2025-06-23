@@ -2,7 +2,10 @@ import torch
 from PIL import Image
 from transformers import Qwen2VLForConditionalGeneration, AutoProcessor, BitsAndBytesConfig
 
-device = "cpu"
+from lib.image_dataset import load_media
+from lib.upscaling.util import scale_to_megapixels
+
+device = "cuda"
 
 class Qwen2VLCaptioner:
     def __init__(self):
@@ -11,7 +14,7 @@ class Qwen2VLCaptioner:
 
         self.model = Qwen2VLForConditionalGeneration.from_pretrained(
             self.model_id, torch_dtype=torch.float16, device_map=device,
-            #quantization_config=BitsAndBytesConfig(load_in_4bit=True)
+            quantization_config=BitsAndBytesConfig(load_in_4bit=True)
         )
         self.processor = AutoProcessor.from_pretrained(self.model_id)
         self.conversation = [
@@ -21,7 +24,7 @@ class Qwen2VLCaptioner:
                     {
                         "type": "image",
                     },
-                    {"type": "text", "text": "Describe this image."},
+                    {"type": "text", "text": "Describe this image. The woman's name is 'SarahF'."},
                 ],
             }
         ]
@@ -51,7 +54,10 @@ class Qwen2VLCaptioner:
 
 
 def generate_qwen2vl_caption(image_path: str):
-    image = Image.open(image_path)
+    image = load_media(image_path)
+    # resize to 0.5 megapixels
+    image = scale_to_megapixels(image, 0.5)
+
     captioning = Qwen2VLCaptioner()
     caption = captioning.predict(image)
     return caption

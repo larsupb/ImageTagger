@@ -1,6 +1,5 @@
 import gradio as gr
-from PIL import Image
-from lib.image_dataset import INSTANCE as DATASET
+from lib.image_dataset import INSTANCE as DATASET, load_media
 
 # Define CSS for a responsive grid layout
 custom_css = """
@@ -21,7 +20,7 @@ custom_css = """
 def checkable_gallery():
     # Function to load images from paths
     def load_images(paths):
-        return [Image.open(path) for path in paths]
+        return [load_media(path) for path in paths]
 
     # Function to render the gallery with current images and checkboxes
     def render_gallery():
@@ -69,7 +68,7 @@ def checkable_gallery():
         def refresh_gallery():
             # Update the image paths or reload them dynamically if needed
             nonlocal images
-            images = load_images(DATASET.image_paths)  # or set image_paths to new paths if dynamic
+            images = load_images(DATASET.media_paths)  # or set image_paths to new paths if dynamic
 
             # Re-render the gallery with the new images
             render_gallery()

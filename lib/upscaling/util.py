@@ -1,3 +1,6 @@
+import math
+
+from PIL.Image import Image, Resampling
 import cv2
 import numpy as np
 import torch
@@ -23,3 +26,15 @@ def tensor_to_image(tensor: torch.Tensor) -> np.ndarray:
     image = image.astype(np.uint8)
     image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
     return image
+
+
+def scale_to_megapixels(image, megapixels=0.5):
+    width, height = image.size
+    aspect_ratio = width / height
+
+    # Calculate the new dimensions to get close to desired megapixel
+    target_pixels = 1_000_000 * megapixels
+    target_height = int(math.sqrt(target_pixels / aspect_ratio))
+    target_width = int(target_height * aspect_ratio)
+
+    return image.resize((target_width, target_height), resample=Resampling.NEAREST)

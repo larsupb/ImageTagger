@@ -51,7 +51,7 @@ def upscale_image_action(image_dict: EditorValue, upscaler_name: str, state_dict
 
 
 def upscale_image_restore_action(index, image_dict: EditorValue) -> EditorValue:
-    img = Image.open(DATASET.image_paths[index])
+    img = Image.open(DATASET.media_paths[index])
     image_dict['background'] = img
     return image_dict
 
@@ -65,7 +65,7 @@ def remove_background_action(image_dict, state_dict) -> EditorValue:
 def generate_mask(index) -> EditorValue:
     if not DATASET.initialized or not DATASET.mask_support:
         return EditorValue(background=None, layers=[], composite=None)
-    path = DATASET.image_paths[index]
+    path = DATASET.media_paths[index]
     if os.path.exists(path):
         with Image.open(path) as img:
             img.load()
@@ -104,7 +104,7 @@ def apply_mask_action(mask, image_dict: EditorValue):
 
 def save_image_action(index, image_dict):
     img = image_dict['background']
-    img_path = DATASET.image_paths[index]
+    img_path = DATASET.media_paths[index]
 
     if not img_path.endswith('.png'):
         img = img.convert('RGB')

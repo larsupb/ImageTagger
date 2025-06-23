@@ -5,7 +5,7 @@ from PIL import Image
 
 import config
 from lib.captioning import save_caption
-from lib.image_dataset import INSTANCE as DATASET
+from lib.image_dataset import INSTANCE as DATASET, load_media
 
 
 def init_dataset(path: str, masks_path: str, filter_missing_captions: bool, subdirectories: bool, load_gallery: bool, state_dict: dict):
@@ -29,7 +29,7 @@ def init_dataset(path: str, masks_path: str, filter_missing_captions: bool, subd
     images_total = DATASET.size() - 1
     slider_new = gr.Slider(value=0, minimum=0, maximum=images_total, label="Image index", step=1, interactive=True)
 
-    gallery = gr.Gallery(value=DATASET.images, allow_preview=False, preview=False, columns=8, type="pil")
+    gallery = gr.Gallery(value=DATASET.images if load_gallery else [], allow_preview=False, preview=False, columns=8, type="pil")
     return gallery, slider_new, *list(loader_data[1:])
 
 
@@ -42,7 +42,7 @@ def load_index(index) -> dict:
     if index < 0:
         return {}
 
-    path = DATASET.image_paths[index]
+    path = DATASET.media_paths[index]
     mask_path = DATASET.mask_paths(index)
 
     img_edit = dict()
@@ -52,10 +52,10 @@ def load_index(index) -> dict:
     img_byte_size = 0
     dimensions = ""
     if os.path.exists(path):
-        img = Image.open(path)
+        media = DATASET.images[index] if DATASET.images else load_media(path)
         img_byte_size = os.path.getsize(path)
-        dimensions = f'{img.size[0]} x {img.size[1]}'
-        img_edit["background"] = img
+        dimensions = f'{media.size[0]} x {media.size[1]}'
+        img_edit["background"] = media
     byte_size_str = f'{img_byte_size / 1024:.2f} kB'
 
     img_mask = None

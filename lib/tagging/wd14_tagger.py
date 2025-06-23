@@ -1,14 +1,14 @@
-import os
 import re
 from typing import Mapping, Tuple, Dict
 
 import cv2
-import gradio as gr
 import numpy as np
 import pandas as pd
 from PIL import Image
 from huggingface_hub import hf_hub_download
 from onnxruntime import InferenceSession
+
+from lib.image_dataset import load_media
 
 
 # noinspection PyUnresolvedReferences
@@ -153,7 +153,8 @@ def image_to_wd14_tags(image: Image.Image, model_name: str, threshold: float,
 
 
 def generate_wd14_caption(image_path: str):
-    caption = image_to_wd14_tags(Image.open(image_path), 'wd14-vit', 0.5, True,
+    image = load_media(image_path)
+    caption = image_to_wd14_tags(image, 'wd14-vit', 0.5, True,
                                  False, False, True)
 
     return caption[1]

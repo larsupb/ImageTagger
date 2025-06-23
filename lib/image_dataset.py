@@ -1,12 +1,20 @@
 import math
 import os
+import shutil
+import zipfile
+from datetime import datetime
 from typing import List
-
 from PIL import Image
+import imageio
 
+VIDEO_EXTENSIONS = ('.mp4', '.avi', '.mov', '.mkv')
+IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.gif')
 
 def is_image(f):
-    return f.lower().endswith(('.jpg', '.jpeg', '.png', '.gif'))
+    return f.lower().endswith(IMAGE_EXTENSIONS)
+
+def is_video(f):
+    return f.lower().endswith(VIDEO_EXTENSIONS)
 
 
 def img_to_caption_path(file_path):
@@ -15,7 +23,10 @@ def img_to_caption_path(file_path):
 
 
 def img_to_mask_path(f, mask_path):
-    return os.path.join(mask_path, os.path.basename(f))
+    base_name = os.path.basename(f)
+    # remove the file extension because masks should always be .png
+    mask_file_name = os.path.splitext(base_name)[0] + ".png"
+    return os.path.join(mask_path, mask_file_name)
 
 
 def is_caption_existing(path):
@@ -27,8 +38,10 @@ def not_filtered(file, ignore_list: list):
     return not any([ignore_pattern in file for ignore_pattern in ignore_list])
 
 
-# Function to resize image to approximately 1 megapixel
 def resize_to_target_megapixels(image, megapixels=0.5):
+    """
+    Resize the image to a target number of megapixels while maintaining the aspect ratio.
+    """
     width, height = image.size
     aspect_ratio = width / height
 
@@ -37,7 +50,23 @@ def resize_to_target_megapixels(image, megapixels=0.5):
     target_height = int(math.sqrt(target_pixels / aspect_ratio))
     target_width = int(target_height * aspect_ratio)
 
-    return image.resize((target_width, target_height), Image.NEAREST)
+    return image.resize((target_width, target_height))
+
+
+def load_media(path):
+    if is_video(path):
+        # read video file and return the 32th frame or the last frame if the video is shorter
+        video = imageio.get_reader(path)
+        frame_count = video.get_length()
+        if frame_count > 32:
+            frame = video.get_data(32)
+        else:
+            frame = video.get_data(frame_count - 1)
+        return Image.fromarray(frame)
+    elif is_image(path):
+        # read image file and return the image
+        return Image.open(path)
+    return None
 
 
 class ImageDataSet:
@@ -49,7 +78,7 @@ class ImageDataSet:
         return cls._instance
 
     def __init__(self):
-        self.image_paths = []
+        self.media_paths = []
         self.images = []
         self.caption_paths = []
         self.caption_texts = dict()
@@ -62,7 +91,7 @@ class ImageDataSet:
         if ignore_list is None:
             ignore_list = []
 
-        self.image_paths = []
+        self.media_paths = []
         self.caption_paths = []
         self.caption_texts = dict()
 
@@ -87,19 +116,21 @@ class ImageDataSet:
             for f in files:
                 full_path = os.path.join(root, f)
                 if only_missing_captions:
-                    if is_image(f) and not_filtered(f, ignore_list) and not is_caption_existing(full_path):
-                        image_paths_temp.append(full_path)
+                    if is_image(f) or is_video(f):
+                        if not_filtered(f, ignore_list) and not is_caption_existing(full_path):
+                            image_paths_temp.append(full_path)
                 else:
-                    if is_image(f) and not_filtered(f, ignore_list):
-                        image_paths_temp.append(full_path)
+                    if is_image(f) or is_video(f):
+                        if not_filtered(f, ignore_list):
+                            image_paths_temp.append(full_path)
 
-        self.image_paths = sorted(image_paths_temp)
+        self.media_paths = sorted(image_paths_temp)
 
-        self.caption_paths = [img_to_caption_path(f) for f in self.image_paths]
+        self.caption_paths = [img_to_caption_path(f) for f in self.media_paths]
 
         if load_images:
             # open and rescale images to 0.5 megapixels
-            self.images = [resize_to_target_megapixels(Image.open(path), 0.5) for path in self.image_paths]
+            self.images = [resize_to_target_megapixels(load_media(path), 0.5) for path in self.media_paths]
 
     def prune(self, path, subdirectories=False):
         # scan the directory recursively and remove the captions who do not belong to an image
@@ -113,30 +144,43 @@ class ImageDataSet:
                 if not f.lower().endswith('.txt'):
                     continue
                 # check if there exists an image file with the same name
-                image_path = os.path.splitext(full_path)[0]
-                # append potential image file extensions
-                image_path = [image_path + ext for ext in ['.jpg', '.jpeg', '.png', '.gif']]
-                # remove the caption file if no image file exists
-                if not any([os.path.exists(img) for img in image_path]):
+                media_path = os.path.splitext(full_path)[0]
+                # append potential media file extensions
+                media_path = [media_path + ext for ext in VIDEO_EXTENSIONS + IMAGE_EXTENSIONS]
+                # remove the caption file if no media file exists
+                if not any([os.path.exists(img) for img in media_path]):
                     os.remove(full_path)
 
     def empty(self):
-        return len(self.image_paths) == 0
+        return len(self.media_paths) == 0
 
     def mask_paths(self, index):
-        return img_to_mask_path(self.image_paths[index], self.masks_path)
+        return img_to_mask_path(self.media_paths[index], self.masks_path)
 
     def size(self):
-        return len(self.image_paths)
+        return len(self.media_paths)
+
+    def backup(self):
+        # create a compressed backup of the dataset
+        # take the content of the data directory and compress it
+        to_compress = self.media_paths + self.caption_paths
+        # create an archive file with the images and captions
+        # store it in the data directory
+        target_dir = os.path.dirname(self.media_paths[0])
+        date = datetime.now().strftime("%Y%m%d_%H%M%S")
+        with zipfile.ZipFile(os.path.join(target_dir, 'dataset_backup_' + date + '.zip'), 'w') as zipf:
+            for f in to_compress:
+                if os.path.exists(f):
+                    zipf.write(f, os.path.basename(f), compress_type=zipfile.ZIP_DEFLATED)
 
     def delete_image(self, current_index):
-        os.remove(self.image_paths[current_index])
+        os.remove(self.media_paths[current_index])
         if os.path.exists(self.mask_paths(current_index)):
             os.remove(self.mask_paths(current_index))
         if os.path.exists(self.caption_paths[current_index]):
             os.remove(self.caption_paths[current_index])
 
-        del self.image_paths[current_index]
+        del self.media_paths[current_index]
         del self.images[current_index]
         del self.caption_paths[current_index]
 
@@ -145,19 +189,28 @@ class ImageDataSet:
         Rename to 5 digit number
         '''
         new_name = str(offset + current_index).zfill(5)
-        new_image_path = os.path.join(os.path.dirname(self.image_paths[current_index]),
+        new_image_path = os.path.join(os.path.dirname(self.media_paths[current_index]),
                                       new_name + self.curate_file_extension(current_index))
         new_caption_path = img_to_caption_path(new_image_path)
         new_mask_path = img_to_mask_path(new_image_path, self.masks_path)
-        os.rename(self.image_paths[current_index], new_image_path)
-        if os.path.exists(self.caption_paths[current_index]):
-            os.rename(self.caption_paths[current_index], new_caption_path)
-        if os.path.exists(self.mask_paths(current_index)):
-            os.rename(self.mask_paths(current_index), new_mask_path)
-        return new_name
+
+        if not os.path.exists(new_image_path):
+            os.rename(self.media_paths[current_index], new_image_path)
+            if os.path.exists(self.caption_paths[current_index]):
+                os.rename(self.caption_paths[current_index], new_caption_path)
+            if os.path.exists(self.mask_paths(current_index)):
+                os.rename(self.mask_paths(current_index), new_mask_path)
+
+            # update the paths in the dataset
+            self.media_paths[current_index] = new_image_path
+            self.caption_paths[current_index] = new_caption_path
+            return new_name
+        else:
+            print("File already exists, skipping rename")
+            return None
 
     def curate_file_extension(self, current_index):
-        extension = os.path.splitext(self.image_paths[current_index])[1]
+        extension = os.path.splitext(self.media_paths[current_index])[1]
         if extension.lower() in ['.jpg', '.jpeg']:
             extension = '.jpg'
         return extension
@@ -167,7 +220,7 @@ class ImageDataSet:
             raise Exception("Dataset not initialized!")
 
         output = []
-        for i, image_path in enumerate(self.image_paths):
+        for i, image_path in enumerate(self.media_paths):
             output.append(validate(i, image_path, self.mask_paths(i), self.read_caption_at(i)))
         return output
 
@@ -201,7 +254,7 @@ class ImageDataSet:
                 f.write(new_text)
 
     def find_index(self, path):
-        return self.image_paths.index(path)
+        return self.media_paths.index(path)
 
 
 INSTANCE = ImageDataSet()
