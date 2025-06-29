@@ -1,3 +1,4 @@
+import os
 import re
 import gradio as gr
 import pandas as pd
@@ -112,24 +113,76 @@ def prepend_tag(tag: str, sort_by: str):
             DATASET.save_caption(i, caption_text)
     return create_tag_cloud(sort_by)
 
+def move_to_subdirectory(selected_tags: List[str], inverse: bool, subdir_name: str = "tagged"):
+    if not DATASET.initialized:
+        return "Dataset not initialized."
+    if not selected_tags:
+        return "No tags selected for moving."
+    if not subdir_name:
+        return "Subdirectory name cannot be empty."
 
-def refresh_thumbnails(tags: list, inverse: bool):
+    move_list = []
+    def check_relevance(index, img_path, mask_path, caption_path):
+        image_tags = DATASET.read_tags_at(index)
+        # if any element of tags is in image_tags, create a gr.Image object
+        match = not inverse and any(tag in image_tags for tag in selected_tags)
+        inverse_match = inverse and all(tag not in image_tags for tag in selected_tags)
+        if match or inverse_match:
+            move_list.append(img_path)
+            if caption_path:
+                move_list.append(caption_path)
+            if mask_path:
+                move_list.append(mask_path)
+    DATASET.scan(check_relevance)
+
+    for img_path in move_list:
+        print("Moving image {} to subdirectory {}".format(img_path, subdir_name))
+        # Construct the new path
+        base_dir = DATASET.base_dir
+        new_path = os.path.join(base_dir, subdir_name, os.path.basename(img_path))
+        try:
+            # Move the file
+            os.rename(img_path, new_path)
+        except Exception as e:
+            return f"Error moving {img_path} to {new_path}: {str(e)}"
+    return f"Moved {len(move_list)} images to '{subdir_name}' subdirectory."
+
+
+def create_subdirectory(subdir_name):
+    base_dir = DATASET.base_dir
+
+    # Sanitize and construct full path
+    safe_name = subdir_name.strip().replace("..", "").replace("/", "")
+    full_path = os.path.join(base_dir, safe_name)
+
+    try:
+        os.makedirs(full_path, exist_ok=False)
+        return f"Subdirectory '{safe_name}' created at: {full_path}"
+    except FileExistsError:
+        return f"Directory '{safe_name}' already exists."
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+def refresh_thumbnails(tags: list, inverse: bool, state_dict: dict):
     if not DATASET.initialized:
         return
     image_controls = []
-
-    def check_relevance(index, img_path, mask_path, caption):
+    state_dict["captions_gallery_mapping"] = {}
+    def check_relevance(index, img_path, mask_path, caption_path):
         image_tags = DATASET.read_tags_at(index)
         # if any element of tags is in image_tags, create a gr.Image object
         if not inverse and any(tag in image_tags for tag in tags):
             # read image as PIL.Image and add it to the list
-            image_controls.append(load_media(img_path))
+            image_controls.append(DATASET.thumbnail_images[index])
+            state_dict["captions_gallery_mapping"][len(image_controls) - 1] = index
         # if inverse mode and none of the elements of tags is in image_tags, create a gr.Image object
         if inverse and all(tag not in image_tags for tag in tags):
-            image_controls.append(load_media(img_path))
+            image_controls.append(DATASET.thumbnail_images[index])
+            state_dict["captions_gallery_mapping"][len(image_controls) - 1] = index
 
     DATASET.scan(check_relevance)
-    return image_controls
+    return image_controls, state_dict
 
 
 def caption_search(search_for, replace_with):
@@ -167,7 +220,7 @@ def caption_search_and_replace(search_for, replace_with):
         DATASET.save_caption(i, caption_text_mod)
 
 
-def tab_captions() -> gr.Gallery:
+def tab_captions(state: gr.State) -> (gr.Gallery, gr.events.Dependency):
     with gr.Tab("Captions"):
         with gr.Accordion("Tag cloud"):
             with gr.Row():
@@ -186,6 +239,15 @@ def tab_captions() -> gr.Gallery:
                         with gr.Row():
                             button_prepend_tag = gr.Button(value="Prepend tag")
                             button_append_tag = gr.Button(value="Append tag")
+
+                    # Modal for moving images to subdirectory
+                    button_move_tu_subdir = gr.Button("Move to subdirectory")
+                    with gr.Group(visible=False) as modal:
+                        gr.Markdown("### Enter Subdirectory Name")
+                        subdir_input = gr.Textbox(label="Subdirectory Name")
+                        confirm_btn = gr.Button("Create")
+                        cancel_btn = gr.Button("Cancel")
+
                     thumb_view = gr.Gallery(allow_preview=True, preview=False, columns=2)
 
             button_create_tag_cloud.click(create_tag_cloud, inputs=sort_by, outputs=checkbox_tag_cloud)
@@ -195,8 +257,16 @@ def tab_captions() -> gr.Gallery:
             button_prepend_tag.click(prepend_tag, inputs=[textbox_add_tag, sort_by], outputs=checkbox_tag_cloud)
             button_append_tag.click(append_tag, inputs=[textbox_add_tag, sort_by], outputs=checkbox_tag_cloud)
 
-            checkbox_tag_cloud.change(refresh_thumbnails, inputs=[checkbox_tag_cloud, checkbox_inverse_filter],
-                                      outputs=thumb_view)
+            # Show modal for creating a subdirectory
+            button_move_tu_subdir.click(lambda: gr.update(visible=True), None, modal)
+            cancel_btn.click(lambda: gr.update(visible=False), None, modal)
+            reload_event = confirm_btn \
+                .click(create_subdirectory, inputs=subdir_input) \
+                .then(move_to_subdirectory, inputs=[checkbox_tag_cloud, checkbox_inverse_filter, subdir_input]) \
+                .then(lambda: gr.update(visible=False), None, modal)
+
+            checkbox_tag_cloud.change(refresh_thumbnails, inputs=[checkbox_tag_cloud, checkbox_inverse_filter, state],
+                                      outputs=[thumb_view, state])
 
         with gr.Accordion("Search and replace", open=False):
             with gr.Row():
@@ -215,4 +285,4 @@ def tab_captions() -> gr.Gallery:
             # button_batch_replace = gr.Button(value=process_symbol + " Replace", elem_id="button_replace")
             # inputs = [textbox_editing_search_for, textbox_editing_replace_with]
 
-    return thumb_view
+    return thumb_view, reload_event

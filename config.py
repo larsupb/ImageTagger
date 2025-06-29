@@ -30,6 +30,10 @@ def upscaler(state_dict):
         state_dict['upscaler'] = '4x_NMKD-Siax_200k.pth'
     return state_dict['upscaler']
 
+def upscale_target_megapixels(state_dict):
+    if "upscale_target_megapixels" not in state_dict:
+        state_dict["upscale_target_megapixels"] = 2.0
+    return state_dict["upscale_target_megapixels"]
 
 def models_dir(state_dict):
     if "models_dir" not in state_dict:

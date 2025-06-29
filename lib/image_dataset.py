@@ -23,6 +23,7 @@ def img_to_caption_path(file_path):
 
 
 def img_to_mask_path(f, mask_path):
+    # TODO: Think about absolut path issues
     base_name = os.path.basename(f)
     # remove the file extension because masks should always be .png
     mask_file_name = os.path.splitext(base_name)[0] + ".png"
@@ -78,59 +79,59 @@ class ImageDataSet:
         return cls._instance
 
     def __init__(self):
+        self.base_dir = None
         self.media_paths = []
         self.images = []
+        self.thumbnail_images = []
         self.caption_paths = []
         self.caption_texts = dict()
         self.initialized = False
         self.mask_support = False
         self.masks_path = None
 
-    def load(self, path, masks_path=None, only_missing_captions=False, ignore_list: List = None, subdirectories=False,
+    def load(self, path, masks_path=None, only_missing_captions=False, ignore_list=None, subdirectories=False,
              load_images=True):
         if ignore_list is None:
             ignore_list = []
 
         self.media_paths = []
         self.caption_paths = []
-        self.caption_texts = dict()
+        self.caption_texts = {}
+        self.initialized = path and os.path.exists(path)
 
-        self.initialized = path is not None and os.path.exists(path)
-
-        if masks_path is not None and len(masks_path) > 0:
-            if not os.path.exists(masks_path):
-                os.makedirs(masks_path)
-            self.mask_support = True
-        else:
-            self.mask_support = False
-        self.masks_path = masks_path
-
-        if path is None:
+        if not self.initialized:
             return
 
-        image_paths_temp = []
+        self.base_dir = path
+        self.mask_support = bool(masks_path)
+        self.masks_path = masks_path
+
+        if self.mask_support and not os.path.exists(masks_path):
+            os.makedirs(masks_path)
+
+        def should_include(file_path, file_name):
+            if not (is_image(file_name) or is_video(file_name)):
+                return False
+            if not_filtered(file_name, ignore_list):
+                if only_missing_captions:
+                    return not is_caption_existing(file_path)
+                return True
+            return False
+
         for root, dirs, files in os.walk(path):
-            # skip subdirectories if parameter subdirectories is False
             if not subdirectories and root != path:
                 continue
-            for f in files:
-                full_path = os.path.join(root, f)
-                if only_missing_captions:
-                    if is_image(f) or is_video(f):
-                        if not_filtered(f, ignore_list) and not is_caption_existing(full_path):
-                            image_paths_temp.append(full_path)
-                else:
-                    if is_image(f) or is_video(f):
-                        if not_filtered(f, ignore_list):
-                            image_paths_temp.append(full_path)
+            for file_name in files:
+                full_path = os.path.join(root, file_name)
+                if should_include(full_path, file_name):
+                    self.media_paths.append(full_path)
 
-        self.media_paths = sorted(image_paths_temp)
-
+        self.media_paths.sort()
         self.caption_paths = [img_to_caption_path(f) for f in self.media_paths]
 
         if load_images:
-            # open and rescale images to 0.5 megapixels
-            self.images = [resize_to_target_megapixels(load_media(path), 0.5) for path in self.media_paths]
+            self.images = [load_media(p) for p in self.media_paths]
+            self.thumbnail_images = [resize_to_target_megapixels(p, 0.2) for p in self.images]
 
     def prune(self, path, subdirectories=False):
         # scan the directory recursively and remove the captions who do not belong to an image
@@ -155,7 +156,8 @@ class ImageDataSet:
         return len(self.media_paths) == 0
 
     def mask_paths(self, index):
-        return img_to_mask_path(self.media_paths[index], self.masks_path)
+        mask_path = img_to_mask_path(self.media_paths[index], self.masks_path)
+        return mask_path
 
     def size(self):
         return len(self.media_paths)
@@ -182,6 +184,7 @@ class ImageDataSet:
 
         del self.media_paths[current_index]
         del self.images[current_index]
+        del self.thumbnail_images[current_index]
         del self.caption_paths[current_index]
 
     def rename_image(self, current_index, offset):
@@ -215,13 +218,19 @@ class ImageDataSet:
             extension = '.jpg'
         return extension
 
-    def scan(self, validate):
+    def scan(self, func):
         if not self.initialized:
             raise Exception("Dataset not initialized!")
 
         output = []
         for i, image_path in enumerate(self.media_paths):
-            output.append(validate(i, image_path, self.mask_paths(i), self.read_caption_at(i)))
+            mask_paths = self.mask_paths(i)
+            if not os.path.exists(mask_paths):
+                mask_paths = None
+            caption_path = self.caption_paths[i]
+            if not os.path.exists(caption_path):
+                caption_path = None
+            output.append(func(i, image_path, mask_paths, caption_path))
         return output
 
     def read_caption_at(self, index):
@@ -256,5 +265,11 @@ class ImageDataSet:
     def find_index(self, path):
         return self.media_paths.index(path)
 
+    def update_image(self, index, new_image):
+        if not self.initialized or index < 0 or index >= len(self.media_paths):
+            return
+        new_image.save(self.media_paths[index])
+        self.images[index] = new_image
+        self.thumbnail_images[index] = resize_to_target_megapixels(new_image, 0.2)
 
 INSTANCE = ImageDataSet()

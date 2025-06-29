@@ -1,5 +1,4 @@
 import os
-from typing import List
 
 import gradio as gr
 import numpy as np
@@ -10,7 +9,7 @@ import config
 from lib.captioning import generate_caption, TAGGERS
 from lib.masking import remove_background, ask_mask_from_model
 from lib.upscaling import Upscalers, upscale_image
-from ui_navigation import load_index, navigate_forward, jump, navigate_backward
+from ui_navigation import load_index, navigate_forward, jump, navigate_backward, to_control_group
 
 folder_symbol = '\U0001f4c2'  # 📂
 refresh_symbol = '\U0001f504'  # 🔄
@@ -35,17 +34,20 @@ def delete_image(current_index):
     slider_new = gr.Slider(value=current_index, minimum=0, maximum=images_total, label="Image index", step=1,
                            interactive=True)
     # open and rescale images to 0.5 megapixels
-    gallery = gr.Gallery(value=DATASET.images, allow_preview=False, preview=False, columns=8, type="pil")
+    gallery = gr.Gallery(value=DATASET.thumbnail_images, allow_preview=False, preview=False, columns=8, type="pil")
 
     loader_data = load_index(current_index)
     return gallery, slider_new, *list(loader_data.values())[1:]
 
 
-def upscale_image_action(image_dict: EditorValue, upscaler_name: str, state_dict: dict,
+def upscale_image_action(img_index: int, image_dict: EditorValue, state_dict: dict, upscaler_name: str,
                          progress=gr.Progress()) -> EditorValue:
-    img = image_dict['background'].convert("RGB")
-    img_out = upscale_image(img, upscaler_name, state_dict, progress=progress)
-
+    img = DATASET.images[img_index]
+    img_out = upscale_image(img, upscaler_name, state_dict,
+                            target_megapixels=config.upscale_target_megapixels(state_dict),
+                            max_current_megapixels=config.upscale_target_megapixels(state_dict), progress=progress)
+    state_dict["image_upscaled"] = img_out
+    state_dict["image_upscaled_index"] = img_index
     image_dict['background'] = img_out
     return image_dict
 
@@ -102,13 +104,12 @@ def apply_mask_action(mask, image_dict: EditorValue):
     return image_dict
 
 
-def save_image_action(index, image_dict):
-    img = image_dict['background']
-    img_path = DATASET.media_paths[index]
+def save_image_action(index, state_dict):
+    if state_dict["image_upscaled"] and state_dict["image_upscaled_index"] == index:
+        img = state_dict["image_upscaled"]
+        DATASET.update_image(index, img)
 
-    if not img_path.endswith('.png'):
-        img = img.convert('RGB')
-    img.save(img_path)
+    return to_control_group(load_index(index))
 
 
 def tab_editing(state: gr.State, gallery: gr.Gallery):
@@ -131,7 +132,7 @@ def tab_editing(state: gr.State, gallery: gr.Gallery):
         with gr.Row():
             with gr.Column():
                 gr.Markdown("Image")
-                image_editor = gr.ImageEditor(interactive=True, type='pil', height=800,
+                image_editor = gr.ImageEditor(interactive=True, type='pil', height=800, fixed_canvas=True,
                                               brush=gr.Brush(default_size=50, default_color="#ff0000"),
                                               eraser=gr.Eraser(50))
                 with gr.Accordion("Modifications"):
@@ -172,11 +173,11 @@ def tab_editing(state: gr.State, gallery: gr.Gallery):
     slider.input(jump, inputs=[slider, textbox_caption, textbox_image_path], outputs=control_output_group)
 
     button_generate_caption.click(generate_caption, inputs=[slider, radio_engine, state], outputs=textbox_caption)
-    button_upscale.click(upscale_image_action, inputs=[image_editor, state, dropdown_upscaler], outputs=image_editor)
+    button_upscale.click(upscale_image_action, inputs=[slider, image_editor, state, dropdown_upscaler], outputs=image_editor)
     button_upscale_restore.click(upscale_image_restore_action, inputs=[slider, image_editor], outputs=image_editor)
 
     button_remove_background.click(remove_background_action, inputs=[image_editor, state], outputs=image_editor)
-    button_save_image.click(save_image_action, inputs=[slider, image_editor])
+    button_save_image.click(save_image_action, inputs=[slider, state], outputs=control_output_group)
 
     button_apply_mask.click(apply_mask_action, inputs=[image_mask_preview, image_editor], outputs=image_editor)
     button_generate_mask.click(generate_mask, inputs=slider, outputs=image_editor, show_progress="full")

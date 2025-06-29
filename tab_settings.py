@@ -63,3 +63,11 @@ def tab_settings(state: gr.State):
             radio_upscalers = gr.Radio(choices=[upscaler.name for upscaler in Upscalers],
                                           label="Upscaler", value=config.upscaler(state.value))
             radio_upscalers.change(update_upscaler, inputs=[state, radio_upscalers])
+
+            slider_upscale_target_megapixels = gr.Slider(value=config.upscale_target_megapixels(state.value),
+                                                         minimum=0.1, maximum=10.0, label="Target megapixels",
+                                                         step=0.1)
+            slider_upscale_target_megapixels.change(
+                lambda state_dict, value: config.update(state_dict, "upscale_target_megapixels", value),
+                inputs=[state, slider_upscale_target_megapixels]
+            )

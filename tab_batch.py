@@ -34,7 +34,9 @@ def batch_process(rename, rename_offset, upscale, mask, captioning, tagger, stat
             else:
                 log += "Failed to rename " + loader_data['path'] + "\n"
         if upscale:
-            image = upscale_image(orig_media, config.upscaler(state_dict), state_dict)
+            image = upscale_image(orig_media, config.upscaler(state_dict), state_dict,
+                                  max_current_megapixels=config.upscale_target_megapixels(state_dict),
+                                  target_megapixels=config.upscale_target_megapixels(state_dict))
             image.save(loader_data['path'])
             # Refresh loader data
             loader_data['img_edit']['background'] = image

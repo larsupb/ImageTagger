@@ -44,7 +44,7 @@ if __name__ == '__main__':
         with gr.Tabs() as tabs:
             gallery = tab_browse(tabs, control_output_group)
             control_output_group += tab_editing(state, gallery)
-            gallery_2 = tab_captions()
+            gallery_2, captions_dependency = tab_captions(state)
             tab_validate()
             batch_dependency = tab_batch(state)
             tab_settings(state)
@@ -54,15 +54,28 @@ if __name__ == '__main__':
                 out = (gr.Tabs(selected=1),) + to_control_group(load_index(new_idx))
                 return out
             gallery.select(on_gallery_click, inputs=[], outputs=[tabs] + control_output_group)
-            gallery_2.select(on_gallery_click, inputs=[], outputs=[tabs] + control_output_group)
+
+            def on_caption_gallery_click(data: gr.EventData, state: dict):
+                new_idx = data._data['index']
+                if 'captions_gallery_mapping' in state:
+                    new_idx = state['captions_gallery_mapping'][new_idx]
+                    out = (gr.Tabs(selected=1),) + to_control_group(load_index(new_idx))
+                    return out
+                return None
+            gallery_2.select(on_caption_gallery_click, inputs=[state], outputs=[tabs] + control_output_group)
 
         button_load_ds.click(init_dataset,
                              inputs=[input_folder_path, mask_folder_path,
                                      cb_only_missing_captions, cb_subdirectories, cb_load_gallery, state],
                              outputs=[gallery] + control_output_group)
-        # Force reloading the dataset when batch processing took place
-        batch_dependency.then(init_dataset, inputs=[input_folder_path, mask_folder_path,
-                                                    cb_only_missing_captions, cb_subdirectories, cb_load_gallery, state],
-                              outputs=[gallery] + control_output_group)
+
+        # Force reloading the dataset when there were changes made by dependencies (like batch processing)
+        for dependency in [captions_dependency, batch_dependency]:
+            dependency.then(
+                init_dataset,
+                inputs=[input_folder_path, mask_folder_path, cb_only_missing_captions,
+                        cb_subdirectories, cb_load_gallery, state],
+                outputs=[gallery] + control_output_group
+            )
     app.launch()
 
