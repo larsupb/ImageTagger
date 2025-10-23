@@ -9,7 +9,7 @@ import config
 from lib.captioning import generate_caption, TAGGERS
 from lib.masking import remove_background, ask_mask_from_model
 from lib.upscaling import Upscalers, upscale_image
-from ui_navigation import load_index, navigate_forward, jump, navigate_backward, to_control_group
+from ui_navigation import load_index, navigate_forward, jump, navigate_backward, to_control_group, toggle_bookmark
 
 folder_symbol = '\U0001f4c2'  # 📂
 refresh_symbol = '\U0001f504'  # 🔄
@@ -19,6 +19,8 @@ delete_symbol = u'\u232B'
 process_symbol = u'\u21A9'
 backward_symbol = u'\u25C0'
 forward_symbol = u'\u25B6'
+bookmark_on = "🔖"  # symbol when toggled on
+bookmark_off = "📑"
 
 from lib.image_dataset import INSTANCE as DATASET
 
@@ -42,7 +44,7 @@ def delete_image(current_index):
 
 def upscale_image_action(img_index: int, image_dict: EditorValue, state_dict: dict, upscaler_name: str,
                          progress=gr.Progress()) -> EditorValue:
-    img = DATASET.images[img_index]
+    img = DATASET.media_paths[img_index]
     img_out = upscale_image(img, upscaler_name, state_dict,
                             target_megapixels=config.upscale_target_megapixels(state_dict),
                             max_current_megapixels=config.upscale_target_megapixels(state_dict), progress=progress)
@@ -72,11 +74,7 @@ def generate_mask(index) -> EditorValue:
         with Image.open(path) as img:
             img.load()
 
-    img_edit = dict()
-    img_edit["composite"] = None
-    img_edit["layers"] = [ask_mask_from_model(img, 'u2net_human_seg')]
-    img_edit["background"] = img
-    return img_edit
+    return EditorValue(background=img, layers=[ask_mask_from_model(img, 'u2net_human_seg')], composite=None)
 
 
 def save_mask_action(index, editor_value: EditorValue):
@@ -112,11 +110,24 @@ def save_image_action(index, state_dict):
     return to_control_group(load_index(index))
 
 
+def align_visibility(image_editor):
+    if image_editor and image_editor['background'] is not None:
+        return gr.update(visible=True), gr.update(visible=False)
+    else:
+        return gr.update(visible=False), gr.update(visible=True)
+
+def set_bookmark(index):
+    if DATASET.is_bookmark(index):
+        return gr.update(value=bookmark_on)
+    else:
+        return gr.update(value=bookmark_off)
+
 def tab_editing(state: gr.State, gallery: gr.Gallery):
     with gr.Tab(id=1, label="Edit"):
         with gr.Row():
             slider = gr.Slider(value=0, minimum=0, maximum=1, label="Image index", step=1, interactive=True)
             textbox_images_total = gr.Textbox(value="0", label="Images total", elem_id="textbox_small")
+            button_bookmark = gr.Button(value=bookmark_off, elem_id='open_folder_small')
             button_backward = gr.Button(value=backward_symbol, elem_id='open_folder_small')
             button_forward = gr.Button(value=forward_symbol, elem_id='open_folder_small')
             button_delete = gr.Button(value=delete_symbol, elem_id='open_folder_small')
@@ -131,10 +142,11 @@ def tab_editing(state: gr.State, gallery: gr.Gallery):
 
         with gr.Row():
             with gr.Column():
-                gr.Markdown("Image")
+                gr.Markdown("Image/Video")
                 image_editor = gr.ImageEditor(interactive=True, type='pil', height=800, fixed_canvas=True,
                                               brush=gr.Brush(default_size=50, default_color="#ff0000"),
                                               eraser=gr.Eraser(50))
+                video_display = gr.Video(autoplay=True, loop=True, show_label=False, visible=False, height=800)
                 with gr.Accordion("Modifications"):
                     with gr.Row():
                         button_remove_background = gr.Button(value="Remove background", elem_id='rem_bg')
@@ -164,13 +176,24 @@ def tab_editing(state: gr.State, gallery: gr.Gallery):
                     button_apply_mask = gr.Button(value="Apply mask " + document_symbol, elem_id='apply_mask')
 
     control_output_group = [slider, textbox_images_total, textbox_image_path, textbox_image_size,
-                             textbox_image_dimensions, textbox_caption, image_editor, image_mask_preview]
+                             textbox_image_dimensions, textbox_caption, image_editor, image_mask_preview, video_display]
 
-    button_backward.click(navigate_backward, inputs=[slider, textbox_caption], outputs=control_output_group)
-    button_forward.click(navigate_forward, inputs=[slider, textbox_caption], outputs=control_output_group)
-    button_delete.click(delete_image, inputs=[slider], outputs=[gallery] + control_output_group)
+    slider.input(jump, inputs=[slider, textbox_caption, textbox_image_path], outputs=control_output_group).\
+        then(align_visibility, inputs=[image_editor], outputs=[image_editor, video_display]).\
+        then(set_bookmark, inputs=[slider], outputs=[button_bookmark])
 
-    slider.input(jump, inputs=[slider, textbox_caption, textbox_image_path], outputs=control_output_group)
+    button_bookmark.click(toggle_bookmark, inputs=[slider], outputs=[button_bookmark])
+
+    button_backward.click(navigate_backward, inputs=[slider, textbox_caption], outputs=control_output_group).\
+        then(align_visibility, inputs=[image_editor], outputs=[image_editor, video_display]).\
+        then(set_bookmark, inputs=[slider], outputs=[button_bookmark])
+    button_forward.click(navigate_forward, inputs=[slider, textbox_caption], outputs=control_output_group).\
+        then(align_visibility, inputs=[image_editor], outputs=[image_editor, video_display]).\
+        then(set_bookmark, inputs=[slider], outputs=[button_bookmark])
+    button_delete.click(delete_image, inputs=[slider], outputs=[gallery] + control_output_group).\
+        then(align_visibility, inputs=[image_editor], outputs=[image_editor, video_display]).\
+        then(set_bookmark, inputs=[slider], outputs=[button_bookmark])
+
 
     button_generate_caption.click(generate_caption, inputs=[slider, radio_engine, state], outputs=textbox_caption)
     button_upscale.click(upscale_image_action, inputs=[slider, image_editor, state, dropdown_upscaler], outputs=image_editor)
@@ -184,4 +207,4 @@ def tab_editing(state: gr.State, gallery: gr.Gallery):
     button_save_mask.click(save_mask_action, inputs=[slider, image_editor], outputs=image_mask_preview,
                            show_progress="full")
 
-    return control_output_group
+    return control_output_group, button_bookmark

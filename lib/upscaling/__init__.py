@@ -34,7 +34,8 @@ def upscale_image(img: Image, upscaler_name:str, state_dict: dict, progress=None
     upscaler = next((upscaler for upscaler in Upscalers if upscaler.name == upscaler_name), None)
     if upscaler is None:
         return None
-    upscaler_model = os.path.join(config.models_dir(state_dict), 'upscalers', upscaler.value[0])
+    # read directory from current file
+    upscaler_model = os.path.join(os.getcwd(), config.models_dir(state_dict), 'upscalers', upscaler.value[0])
 
     # if upscaler_model file does not exist, download it
     if not os.path.exists(upscaler_model):

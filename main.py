@@ -7,11 +7,20 @@ from lib.common_gui import get_folder_path
 from tab_batch import tab_batch
 from tab_browsing import tab_browse
 from tab_captions import tab_captions
-from tab_editing import tab_editing
+from tab_editing import tab_editing, align_visibility, set_bookmark
 from tab_settings import tab_settings
+from tab_tools import tab_tools
 from tab_validation import tab_validate
 from ui_navigation import init_dataset, load_index, to_control_group
 from ui_symbols import folder_symbol, process_symbol
+
+js = '''
+function js(){
+    window.set_cookie = function(key, value) {
+        document.cookie = key+'='+value+'; Path=/; SameSite=Strict';return [value]
+    }
+}
+'''
 
 if __name__ == '__main__':
     css = ""
@@ -27,6 +36,12 @@ if __name__ == '__main__':
                 button_open_dir = gr.Button(value=folder_symbol, elem_id='open_folder_small')
                 input_folder_path = gr.Textbox(value="", label="Input folder",
                                                placeholder="Directory containing the images")
+
+                def input_folder_path_change(value: str):
+                    pass
+                input_folder_path.change(fn=input_folder_path_change, inputs = [input_folder_path], outputs = [],
+                                         js = "(value) => set_cookie('directory_history', value)")
+
                 button_open_masks_dir = gr.Button(value=folder_symbol, elem_id='open_folder_small')
                 mask_folder_path = gr.Textbox(value="", label="Output masks folder",
                                               placeholder="Directory to store masks")
@@ -43,17 +58,26 @@ if __name__ == '__main__':
         control_output_group = []
         with gr.Tabs() as tabs:
             gallery = tab_browse(tabs, control_output_group)
-            control_output_group += tab_editing(state, gallery)
+            control_output_group_1, button_bookmark = tab_editing(state, gallery)
+            control_output_group += control_output_group_1
+
+            slider = control_output_group[0]  # Improve this!
+            image_editor = control_output_group[-3]  # Improve this!
+            video_display = control_output_group[-1] # Improve this!
             gallery_2, captions_dependency = tab_captions(state)
             tab_validate()
             batch_dependency = tab_batch(state)
+            tab_tools(state)
             tab_settings(state)
+
 
             def on_gallery_click(data: gr.EventData):
                 new_idx = data._data['index']
                 out = (gr.Tabs(selected=1),) + to_control_group(load_index(new_idx))
                 return out
-            gallery.select(on_gallery_click, inputs=[], outputs=[tabs] + control_output_group)
+            gallery.select(on_gallery_click, inputs=[], outputs=[tabs] + control_output_group). \
+                then(align_visibility, inputs=[image_editor], outputs=[image_editor, video_display]). \
+                then(set_bookmark, inputs=[slider], outputs=[button_bookmark])
 
             def on_caption_gallery_click(data: gr.EventData, state: dict):
                 new_idx = data._data['index']
@@ -62,7 +86,9 @@ if __name__ == '__main__':
                     out = (gr.Tabs(selected=1),) + to_control_group(load_index(new_idx))
                     return out
                 return None
-            gallery_2.select(on_caption_gallery_click, inputs=[state], outputs=[tabs] + control_output_group)
+            gallery_2.select(on_caption_gallery_click, inputs=[state], outputs=[tabs] + control_output_group). \
+                then(align_visibility, inputs=[image_editor], outputs=[image_editor, video_display]). \
+                then(set_bookmark, inputs=[slider], outputs=[button_bookmark])
 
         button_load_ds.click(init_dataset,
                              inputs=[input_folder_path, mask_folder_path,
@@ -77,5 +103,14 @@ if __name__ == '__main__':
                         cb_subdirectories, cb_load_gallery, state],
                 outputs=[gallery] + control_output_group
             )
+
+        def get_history(request: gr.Request):
+            key = "directory_history"
+            if key in request.cookies:
+                return request.cookies[key]
+            return ""
+
+        app.load(fn=get_history, js=js, outputs=[input_folder_path])  # Load JavaScript function to set cookies
+
     app.launch()
 

@@ -1,9 +1,13 @@
+import json
 import math
 import os
 import shutil
 import zipfile
 from datetime import datetime
+from io import BytesIO
 from typing import List
+
+import PIL
 from PIL import Image
 import imageio
 
@@ -39,7 +43,7 @@ def not_filtered(file, ignore_list: list):
     return not any([ignore_pattern in file for ignore_pattern in ignore_list])
 
 
-def resize_to_target_megapixels(image, megapixels=0.5):
+def resize_to_target_megapixels(image: PIL.Image.Image, megapixels=0.5) -> PIL.Image.Image:
     """
     Resize the image to a target number of megapixels while maintaining the aspect ratio.
     """
@@ -54,19 +58,94 @@ def resize_to_target_megapixels(image, megapixels=0.5):
     return image.resize((target_width, target_height))
 
 
-def load_media(path):
+import imageio
+import hashlib
+from PIL import Image
+
+
+def _cache_path(path, max_frames, step, duration) -> str:
+    """
+    Build a unique cache file path for given video + parameters.
+    """
+    base_dir = os.getcwd()  # project dir
+    cache_dir = os.path.join(base_dir, ".cache")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    # make a unique hash from params (safe for long paths)
+    key = f"{path}-{max_frames}-{step}-{duration}"
+    key_hash = hashlib.md5(key.encode("utf-8")).hexdigest()
+    return os.path.join(cache_dir, f"{key_hash}.gif")
+
+
+def _resize_and_crop(img, size=128):
+    """
+    Resize image keeping aspect ratio, then center crop to (size x size).
+    """
+    w, h = img.size
+    scale = size / min(w, h)
+    new_w, new_h = int(w * scale), int(h * scale)
+    img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+    left = (new_w - size) // 2
+    top = (new_h - size) // 2
+    right = left + size
+    bottom = top + size
+
+    return img.crop((left, top, right, bottom))
+
+def load_media(path, max_frames=32, step=2, duration=100, size=128) -> str | None:
+    """
+    Load media and return either an Image (for images) or an animated GIF (for videos).
+
+    Args:
+        path (str): Path to the media file.
+        max_frames (int): Maximum number of frames to extract from the video.
+        step (int): Take every nth frame to reduce GIF size.
+        duration (int): Duration of each frame in ms for the GIF.
+    """
+    cache_file = _cache_path(path, max_frames, step, duration)
+    if os.path.exists(cache_file):
+        return cache_file
+
     if is_video(path):
-        # read video file and return the 32th frame or the last frame if the video is shorter
-        video = imageio.get_reader(path)
-        frame_count = video.get_length()
-        if frame_count > 32:
-            frame = video.get_data(32)
-        else:
-            frame = video.get_data(frame_count - 1)
-        return Image.fromarray(frame)
+        try:
+            # Video was not cached, process it now
+            video = imageio.get_reader(path)
+            frames = []
+            for i, frame in enumerate(video):
+                if i % step == 0:
+                    img = Image.fromarray(frame)
+                    img = _resize_and_crop(img, size=size)
+                    frames.append(img)
+                if len(frames) >= max_frames:
+                    break
+
+            if not frames:
+                raise ValueError("No frames extracted")
+
+            # Convert frames to GIF in memory (PIL animated GIF)
+            frames[0].info['duration'] = duration
+            frames[0].info['loop'] = 0
+            gif_bytes = BytesIO()
+            frames[0].save(gif_bytes, save_all=True, format="GIF",
+                           append_images=frames[1:], duration=100, loop=0)
+            gif_bytes.seek(0)
+
+            # also persist to cache folder
+            with open(cache_file, "wb") as f:
+                f.write(gif_bytes.getbuffer())
+            return cache_file
+        except Exception as e:
+            print(f"Error reading video {path}: {e}")
+            return None
     elif is_image(path):
-        # read image file and return the image
-        return Image.open(path)
+        img = Image.open(path)
+        img = resize_to_target_megapixels(img, 0.2)
+        cache_file = _cache_path(path, max_frames, step, duration)
+        # Save a copy to the cache folder
+        img.save(cache_file)
+        return cache_file
+
     return None
 
 
@@ -79,15 +158,16 @@ class ImageDataSet:
         return cls._instance
 
     def __init__(self):
-        self.base_dir = None
+        self.base_dir: str = ""
         self.media_paths = []
-        self.images = []
         self.thumbnail_images = []
         self.caption_paths = []
         self.caption_texts = dict()
         self.initialized = False
         self.mask_support = False
         self.masks_path = None
+        self.bookmarks = {}
+
 
     def load(self, path, masks_path=None, only_missing_captions=False, ignore_list=None, subdirectories=False,
              load_images=True):
@@ -97,6 +177,7 @@ class ImageDataSet:
         self.media_paths = []
         self.caption_paths = []
         self.caption_texts = {}
+        self.bookmarks = {}
         self.initialized = path and os.path.exists(path)
 
         if not self.initialized:
@@ -130,8 +211,11 @@ class ImageDataSet:
         self.caption_paths = [img_to_caption_path(f) for f in self.media_paths]
 
         if load_images:
-            self.images = [load_media(p) for p in self.media_paths]
-            self.thumbnail_images = [resize_to_target_megapixels(p, 0.2) for p in self.images]
+            self.thumbnail_images = [load_media(p) for p in self.media_paths]
+
+        bookmarks_path = os.path.join(self.base_dir, "bookmarks.json")
+        if os.path.exists(bookmarks_path):
+            self.bookmarks = json.load(open(bookmarks_path, "r", encoding="utf8"))
 
     def prune(self, path, subdirectories=False):
         # scan the directory recursively and remove the captions who do not belong to an image
@@ -183,7 +267,6 @@ class ImageDataSet:
             os.remove(self.caption_paths[current_index])
 
         del self.media_paths[current_index]
-        del self.images[current_index]
         del self.thumbnail_images[current_index]
         del self.caption_paths[current_index]
 
@@ -269,7 +352,26 @@ class ImageDataSet:
         if not self.initialized or index < 0 or index >= len(self.media_paths):
             return
         new_image.save(self.media_paths[index])
-        self.images[index] = new_image
         self.thumbnail_images[index] = resize_to_target_megapixels(new_image, 0.2)
+
+    def is_bookmark(self, index):
+        image_file_name = os.path.basename(self.media_paths[index])
+        return image_file_name in self.bookmarks and self.bookmarks[image_file_name]
+
+    def toggle_bookmark(self, index, value: bool):
+        image_file_name = os.path.basename(self.media_paths[index])
+        self.bookmarks[image_file_name] = value
+
+        with open(os.path.join(self.base_dir, "bookmarks.json"), "w", encoding="utf8") as f:
+            json.dump(self.bookmarks, f, indent=4)
+
+    def copy_media(self, index, target_directory):
+        if not self.initialized or index < 0 or index >= len(self.media_paths):
+            return
+        if not os.path.exists(target_directory):
+            os.makedirs(target_directory)
+        shutil.copy2(self.media_paths[index], target_directory)
+        if os.path.exists(self.caption_paths[index]):
+            shutil.copy2(self.caption_paths[index], target_directory)
 
 INSTANCE = ImageDataSet()
