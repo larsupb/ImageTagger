@@ -1,3 +1,4 @@
+import PIL
 import torch
 from PIL import Image
 from transformers import Qwen2VLForConditionalGeneration, AutoProcessor, BitsAndBytesConfig
@@ -54,7 +55,7 @@ class Qwen2VLCaptioner:
 
 
 def generate_qwen2vl_caption(image_path: str):
-    image = load_media(image_path)
+    image = PIL.Image.open(image_path)
     # resize to 0.5 megapixels
     image = scale_to_megapixels(image, 0.5)
 

@@ -9,12 +9,6 @@ def tab_settings(state: gr.State):
         def update_combo_taggers(state_dict, taggers):
             config.update(state_dict, "combo_taggers", taggers)
 
-        def update_sbert_taggers(state_dict, taggers):
-            config.update(state_dict, "sbert_taggers", taggers)
-
-        def update_sbert_threshold(state_dict, value):
-            config.update(state_dict, "sbert_threshold", value)
-
         def update_florence_prompt(state_dict, prompt):
             florence_settings = state_dict["florence_settings"]
             florence_settings["prompt"] = prompt
@@ -41,15 +35,6 @@ def tab_settings(state: gr.State):
                                                   value=config.rembg(state.value)["model"])
             rembg_model.change(update_rembg_model, inputs=[state, rembg_model])
 
-        with gr.Row("SBERT"):
-            checkbox_sbert_taggers = gr.CheckboxGroup(choices=['joytag', 'wd14', 'florence'],
-                                                      label="SBERT taggers", value=config.sbert_taggers(state.value))
-            checkbox_sbert_taggers.change(update_sbert_taggers, inputs=[state, checkbox_sbert_taggers])
-
-            slider_sbert_threshold = gr.Slider(value=config.sbert_threshold(state.value), minimum=0., maximum=1.0,
-                                               label="SBERT threshold", step=0.01)
-            slider_sbert_threshold.change(update_sbert_threshold, inputs=[state, slider_sbert_threshold])
-
             textbox_tagger_instruction = gr.Textbox(label="Tagger instruction", placeholder="Enter tagger instruction here..", lines=3,
                                                  interactive=True, value=config.tagger_instruction(state.value))
             textbox_tagger_instruction.change(update_tagger_instruction, inputs=[state, textbox_tagger_instruction])
@@ -58,6 +43,57 @@ def tab_settings(state: gr.State):
                                                   choices=["<GENERATE_PROMPT>", "<DETAILED_CAPTION>", "<MORE_DETAILED_CAPTION>"],
                                                   value=config.florence_settings(state.value)["prompt"])
             textbox_florence_prompt.change(update_florence_prompt, inputs=[state, textbox_florence_prompt])
+
+        with gr.Group():
+            gr.Markdown("### OpenAI-compatible VLM")
+
+            def update_openai_setting(state_dict, key, value):
+                openai_settings = config.openai_settings(state_dict)
+                openai_settings[key] = value
+                config.update(state_dict, "openai_settings", openai_settings)
+
+            with gr.Row():
+                openai_api_key = gr.Textbox(
+                    label="API Key",
+                    placeholder="Enter API key (leave empty for local Ollama)",
+                    value=config.openai_settings(state.value)["api_key"],
+                    type="password"
+                )
+                openai_api_key.change(
+                    lambda s, v: update_openai_setting(s, "api_key", v),
+                    inputs=[state, openai_api_key]
+                )
+
+                openai_base_url = gr.Textbox(
+                    label="Base URL",
+                    placeholder="http://localhost:11434/v1",
+                    value=config.openai_settings(state.value)["base_url"]
+                )
+                openai_base_url.change(
+                    lambda s, v: update_openai_setting(s, "base_url", v),
+                    inputs=[state, openai_base_url]
+                )
+
+                openai_model = gr.Textbox(
+                    label="Model",
+                    placeholder="qwen3:32b",
+                    value=config.openai_settings(state.value)["model"]
+                )
+                openai_model.change(
+                    lambda s, v: update_openai_setting(s, "model", v),
+                    inputs=[state, openai_model]
+                )
+
+            openai_prompt = gr.Textbox(
+                label="Prompt",
+                placeholder="Describe this image in detail.",
+                value=config.openai_settings(state.value)["prompt"],
+                lines=4
+            )
+            openai_prompt.change(
+                lambda s, v: update_openai_setting(s, "prompt", v),
+                inputs=[state, openai_prompt]
+            )
 
         with gr.Row("Upscalers"):
             radio_upscalers = gr.Radio(choices=[upscaler.name for upscaler in Upscalers],

@@ -1,8 +1,8 @@
+import PIL.Image
 import torch
 from PIL import Image
 from transformers import AutoProcessor, AutoModelForCausalLM
 
-from lib.image_dataset import load_media
 from lib.upscaling.util import scale_to_megapixels
 
 
@@ -49,7 +49,7 @@ class FlorenceTagger:
         return list(caption.values())[0]
 
 def generate_florence_caption(image_path: str, prompt: str = '<GENERATE_PROMPT>') -> str:
-    image = load_media(image_path)
+    image = PIL.Image.open(image_path)
     # resize to 0.5 megapixels
     image = scale_to_megapixels(image, 0.5)
 

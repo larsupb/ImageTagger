@@ -64,6 +64,8 @@ def load_index(index) -> dict:
         else:
             media = PIL.Image.open(path)
             dimensions = f'{media.size[0]} x {media.size[1]}'
+
+            image_ext = os.path.splitext(path)[1]
             img_edit["background"] = media
     byte_size_str = f'{img_byte_size / 1024:.2f} kB'
 
@@ -81,7 +83,7 @@ def load_index(index) -> dict:
             # Copy video to a temp file to avoid locking issues
             shutil.copy2(path, temp_path.name)
             path = temp_path.name
-    return {
+    out = {
         "index": index,
         "dataset_size": DATASET.size(),
         "path": path_text,
@@ -90,8 +92,10 @@ def load_index(index) -> dict:
         "caption_text": caption_text,
         "img_edit": None if is_video(path) else img_edit,
         "img_mask": None if is_video(path) else img_mask,
-        "video_display": None if not is_video(path) else path
+        "video_display": path if is_video(path) else None
     }
+    print(out)
+    return out
 
 
 def navigate_forward(current_index, caption_text):

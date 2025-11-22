@@ -1,5 +1,6 @@
 import os
 
+import PIL
 import torch
 import torch.amp.autocast_mode
 import torchvision.transforms.functional as TVF
@@ -65,7 +66,7 @@ def predict(image: Image.Image):
 
 
 def generate_joytag_caption(image_path: str):
-    image = Image.open(image_path)
+    image = PIL.Image.open(image_path)
     tag_string, scores = predict(image)
     #for tag, score in sorted(scores.items(), key=lambda x: x[1], reverse=True):
     #    print(f'{tag}: {score:.3f}')

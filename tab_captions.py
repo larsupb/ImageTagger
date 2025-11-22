@@ -3,10 +3,22 @@ import re
 import gradio as gr
 import pandas as pd
 
-from typing import List
+from typing import List, NamedTuple
 from PIL import Image
 from ui_symbols import process_symbol
 from lib.image_dataset import INSTANCE as DATASET, load_media
+
+
+class CaptionsResult(NamedTuple):
+    controls: 'CaptionsControls'
+    reload_dependency: gr.events.Dependency
+
+class CaptionsControls(NamedTuple):
+    gallery: gr.Gallery
+    tag_cloud_checkbox: gr.CheckboxGroup
+    search_textbox: gr.Textbox
+    replace_textbox: gr.Textbox
+    search_results_dataframe: gr.DataFrame
 
 
 def create_tag_cloud(sort_by: str):
@@ -220,7 +232,7 @@ def caption_search_and_replace(search_for, replace_with):
         DATASET.save_caption(i, caption_text_mod)
 
 
-def tab_captions(state: gr.State) -> (gr.Gallery, gr.events.Dependency):
+def tab_captions(state: gr.State):
     with gr.Tab("Captions"):
         with gr.Accordion("Tag cloud"):
             with gr.Row():
@@ -260,7 +272,7 @@ def tab_captions(state: gr.State) -> (gr.Gallery, gr.events.Dependency):
             # Show modal for creating a subdirectory
             button_move_tu_subdir.click(lambda: gr.update(visible=True), None, modal)
             cancel_btn.click(lambda: gr.update(visible=False), None, modal)
-            reload_event = confirm_btn \
+            reload_dependency = confirm_btn \
                 .click(create_subdirectory, inputs=subdir_input) \
                 .then(move_to_subdirectory, inputs=[checkbox_tag_cloud, checkbox_inverse_filter, subdir_input]) \
                 .then(lambda: gr.update(visible=False), None, modal)
@@ -285,4 +297,13 @@ def tab_captions(state: gr.State) -> (gr.Gallery, gr.events.Dependency):
             # button_batch_replace = gr.Button(value=process_symbol + " Replace", elem_id="button_replace")
             # inputs = [textbox_editing_search_for, textbox_editing_replace_with]
 
-    return thumb_view, reload_event
+    return CaptionsResult(
+        controls=CaptionsControls(
+            gallery=thumb_view,
+            tag_cloud_checkbox=checkbox_tag_cloud,
+            search_textbox=textbox_search_for,
+            replace_textbox=textbox_replace_with,
+            search_results_dataframe=df_search_results
+        ),
+        reload_dependency=reload_dependency
+    )

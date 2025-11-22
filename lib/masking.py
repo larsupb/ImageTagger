@@ -20,7 +20,6 @@ def ask_mask_from_model(image: Image, model):
     # data[...][black_areas.T] = (0, 0, 0, 0)  # Transpose back needed
 
     img_out = Image.fromarray(data)
-
     return img_out
 
 

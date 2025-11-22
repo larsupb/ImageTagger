@@ -4,6 +4,7 @@ import gradio as gr
 import numpy as np
 from PIL import Image
 from gradio.components.image_editor import EditorValue
+from typing import NamedTuple
 
 import config
 from lib.captioning import generate_caption, TAGGERS
@@ -23,6 +24,19 @@ bookmark_on = "🔖"  # symbol when toggled on
 bookmark_off = "📑"
 
 from lib.image_dataset import INSTANCE as DATASET
+
+
+class EditingControls(NamedTuple):
+    slider: gr.Slider
+    images_total: gr.Textbox
+    image_path: gr.Textbox
+    image_size: gr.Textbox
+    image_dimensions: gr.Textbox
+    caption: gr.Textbox
+    image_editor: gr.ImageEditor
+    mask_preview: gr.Image
+    video_display: gr.Video
+    bookmark_button: gr.Button
 
 
 def delete_image(current_index):
@@ -66,20 +80,32 @@ def remove_background_action(image_dict, state_dict) -> EditorValue:
     return image_dict
 
 
-def generate_mask(index) -> EditorValue:
+def generate_mask(index, image_dict: EditorValue) -> EditorValue:
     if not DATASET.initialized or not DATASET.mask_support:
         return EditorValue(background=None, layers=[], composite=None)
-    path = DATASET.media_paths[index]
-    if os.path.exists(path):
-        with Image.open(path) as img:
-            img.load()
 
-    return EditorValue(background=img, layers=[ask_mask_from_model(img, 'u2net_human_seg')], composite=None)
+    # Use current editor background to maintain alignment with any modifications (e.g., upscaling)
+    img = image_dict.get('background')
+    if img is None:
+        img = Image.open(DATASET.media_paths[index])
+
+    # Load or generate mask
+    mask_path = DATASET.mask_paths(index)
+    if os.path.exists(mask_path):
+        mask = Image.open(mask_path)
+    else:
+        mask = ask_mask_from_model(img, 'u2net_human_seg')
+
+    # Ensure mask dimensions match the background image
+    if mask.size != img.size:
+        mask = mask.resize(img.size, resample=Image.Resampling.NEAREST)
+
+    return EditorValue(background=img, layers=[mask], composite=None)
 
 
 def save_mask_action(index, editor_value: EditorValue):
     if not DATASET.initialized or not DATASET.mask_support:
-        return
+        return None
     if editor_value["layers"] is not None:
         img_data = editor_value["layers"][0]
         img_data = img_data.convert('RGB')
@@ -110,11 +136,17 @@ def save_image_action(index, state_dict):
     return to_control_group(load_index(index))
 
 
-def align_visibility(image_editor):
-    if image_editor and image_editor['background'] is not None:
-        return gr.update(visible=True), gr.update(visible=False)
-    else:
+def align_visibility(image_editor, video_display):
+    has_video = False
+    if isinstance(video_display, dict) and video_display.get('value') is not None:
+        has_video = True
+    elif isinstance(video_display, str):  # Path to video
+        has_video = True
+
+    if has_video:
         return gr.update(visible=False), gr.update(visible=True)
+    else:
+        return gr.update(visible=True), gr.update(visible=False)
 
 def set_bookmark(index):
     if DATASET.is_bookmark(index):
@@ -168,7 +200,7 @@ def tab_editing(state: gr.State, gallery: gr.Gallery):
                                                  interactive=True)
                     with gr.Column():
                         radio_engine = gr.Radio(choices=TAGGERS,
-                                                label="Caption engine", value='multi_sbert')
+                                                label="Caption engine", value='joytag')
                     button_generate_caption = gr.Button(value="Generate caption", elem_id='generate_caption')
 
                 with gr.Tab("Mask"):
@@ -179,19 +211,19 @@ def tab_editing(state: gr.State, gallery: gr.Gallery):
                              textbox_image_dimensions, textbox_caption, image_editor, image_mask_preview, video_display]
 
     slider.input(jump, inputs=[slider, textbox_caption, textbox_image_path], outputs=control_output_group).\
-        then(align_visibility, inputs=[image_editor], outputs=[image_editor, video_display]).\
+        then(align_visibility, inputs=[image_editor, video_display], outputs=[image_editor, video_display]).\
         then(set_bookmark, inputs=[slider], outputs=[button_bookmark])
 
     button_bookmark.click(toggle_bookmark, inputs=[slider], outputs=[button_bookmark])
 
     button_backward.click(navigate_backward, inputs=[slider, textbox_caption], outputs=control_output_group).\
-        then(align_visibility, inputs=[image_editor], outputs=[image_editor, video_display]).\
+        then(align_visibility, inputs=[image_editor, video_display], outputs=[image_editor, video_display]).\
         then(set_bookmark, inputs=[slider], outputs=[button_bookmark])
     button_forward.click(navigate_forward, inputs=[slider, textbox_caption], outputs=control_output_group).\
-        then(align_visibility, inputs=[image_editor], outputs=[image_editor, video_display]).\
+        then(align_visibility, inputs=[image_editor, video_display], outputs=[image_editor, video_display]).\
         then(set_bookmark, inputs=[slider], outputs=[button_bookmark])
     button_delete.click(delete_image, inputs=[slider], outputs=[gallery] + control_output_group).\
-        then(align_visibility, inputs=[image_editor], outputs=[image_editor, video_display]).\
+        then(align_visibility, inputs=[image_editor, video_display], outputs=[image_editor, video_display]).\
         then(set_bookmark, inputs=[slider], outputs=[button_bookmark])
 
 
@@ -203,8 +235,19 @@ def tab_editing(state: gr.State, gallery: gr.Gallery):
     button_save_image.click(save_image_action, inputs=[slider, state], outputs=control_output_group)
 
     button_apply_mask.click(apply_mask_action, inputs=[image_mask_preview, image_editor], outputs=image_editor)
-    button_generate_mask.click(generate_mask, inputs=slider, outputs=image_editor, show_progress="full")
+    button_generate_mask.click(generate_mask, inputs=[slider, image_editor], outputs=image_editor, show_progress="full")
     button_save_mask.click(save_mask_action, inputs=[slider, image_editor], outputs=image_mask_preview,
                            show_progress="full")
 
-    return control_output_group, button_bookmark
+    return EditingControls(
+        slider=slider,
+        images_total=textbox_images_total,
+        image_path=textbox_image_path,
+        image_size=textbox_image_size,
+        image_dimensions=textbox_image_dimensions,
+        caption=textbox_caption,
+        image_editor=image_editor,
+        mask_preview=image_mask_preview,
+        video_display=video_display,
+        bookmark_button=button_bookmark
+    )

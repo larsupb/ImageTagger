@@ -58,26 +58,40 @@ if __name__ == '__main__':
         control_output_group = []
         with gr.Tabs() as tabs:
             gallery = tab_browse(tabs, control_output_group)
-            control_output_group_1, button_bookmark = tab_editing(state, gallery)
-            control_output_group += control_output_group_1
+            editing_controls = tab_editing(state, gallery)
+            control_output_group += [
+                editing_controls.slider,
+                editing_controls.images_total,
+                editing_controls.image_path,
+                editing_controls.image_size,
+                editing_controls.image_dimensions,
+                editing_controls.caption,
+                editing_controls.image_editor,
+                editing_controls.mask_preview,
+                editing_controls.video_display
+            ]
 
-            slider = control_output_group[0]  # Improve this!
-            image_editor = control_output_group[-3]  # Improve this!
-            video_display = control_output_group[-1] # Improve this!
-            gallery_2, captions_dependency = tab_captions(state)
+            slider = editing_controls.slider
+            image_editor = editing_controls.image_editor
+            video_display = editing_controls.video_display
+            button_bookmark = editing_controls.bookmark_button
+            captions_result = tab_captions(state)
+            captions_controls = captions_result.controls
+            captions_dependency = captions_result.reload_dependency
+            gallery_2 = captions_controls.gallery
             tab_validate()
             batch_dependency = tab_batch(state)
             tab_tools(state)
             tab_settings(state)
 
-
             def on_gallery_click(data: gr.EventData):
                 new_idx = data._data['index']
                 out = (gr.Tabs(selected=1),) + to_control_group(load_index(new_idx))
                 return out
+
             gallery.select(on_gallery_click, inputs=[], outputs=[tabs] + control_output_group). \
-                then(align_visibility, inputs=[image_editor], outputs=[image_editor, video_display]). \
-                then(set_bookmark, inputs=[slider], outputs=[button_bookmark])
+               then(align_visibility, inputs=[image_editor, video_display], outputs=[image_editor, video_display]). \
+               then(set_bookmark, inputs=[slider], outputs=[button_bookmark])
 
             def on_caption_gallery_click(data: gr.EventData, state: dict):
                 new_idx = data._data['index']
@@ -86,9 +100,10 @@ if __name__ == '__main__':
                     out = (gr.Tabs(selected=1),) + to_control_group(load_index(new_idx))
                     return out
                 return None
+
             gallery_2.select(on_caption_gallery_click, inputs=[state], outputs=[tabs] + control_output_group). \
-                then(align_visibility, inputs=[image_editor], outputs=[image_editor, video_display]). \
-                then(set_bookmark, inputs=[slider], outputs=[button_bookmark])
+               then(align_visibility, inputs=[image_editor, video_display], outputs=[image_editor, video_display]). \
+               then(set_bookmark, inputs=[slider], outputs=[button_bookmark])
 
         button_load_ds.click(init_dataset,
                              inputs=[input_folder_path, mask_folder_path,

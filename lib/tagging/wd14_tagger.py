@@ -1,6 +1,7 @@
 import re
 from typing import Mapping, Tuple, Dict
 
+import PIL
 import cv2
 import numpy as np
 import pandas as pd
@@ -153,7 +154,7 @@ def image_to_wd14_tags(image: Image.Image, model_name: str, threshold: float,
 
 
 def generate_wd14_caption(image_path: str):
-    image = load_media(image_path)
+    image = PIL.Image.open(image_path)
     caption = image_to_wd14_tags(image, 'wd14-vit', 0.5, True,
                                  False, False, True)
 

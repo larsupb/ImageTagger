@@ -17,4 +17,4 @@ opencv-python
 imageio[ffmpeg]
 rembg
 spandrel
-camie_tagger
+openai

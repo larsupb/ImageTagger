@@ -8,18 +8,6 @@ def combo_taggers(state_dict):
     return state_dict['combo_taggers']
 
 
-def sbert_taggers(state_dict):
-    if "sbert_taggers" not in state_dict:
-        state_dict["sbert_taggers"] = ['joytag', 'wd14', 'florence']
-    return state_dict['sbert_taggers']
-
-
-def sbert_threshold(state_dict):
-    if "sbert_threshold" not in state_dict:
-        state_dict["sbert_threshold"] = 0.7
-    return state_dict['sbert_threshold']
-
-
 def florence_settings(state_dict):
     if "florence_settings" not in state_dict:
         state_dict["florence_settings"] = {'prompt': '<DETAILED_CAPTION>'}
@@ -68,3 +56,14 @@ def rembg(state_dict):
     if "rembg" not in state_dict:
         state_dict["rembg"] = {"model": "u2net_human_seg"}
     return state_dict["rembg"]
+
+
+def openai_settings(state_dict):
+    if "openai_settings" not in state_dict:
+        state_dict["openai_settings"] = {
+            "api_key": "",
+            "base_url": "http://localhost:11434/v1",
+            "model": "qwen3:32b",
+            "prompt": "Describe the image in continuous text.",
+        }
+    return state_dict["openai_settings"]

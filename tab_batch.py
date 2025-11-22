@@ -71,7 +71,7 @@ def tab_batch(state: gr.State):
                 checkbox_batch_mask = gr.Checkbox(label="Mask", value=False)
             with gr.Row():
                 checkbox_batch_caption = gr.Checkbox(label="Caption", value=True)
-                checkbox_batch_caption_method = gr.Radio(choices=TAGGERS, value='multi_sbert')
+                checkbox_batch_caption_method = gr.Radio(choices=TAGGERS, value='joytag')
         with gr.Column():
             textbox_processing = gr.Textbox(label="Log", placeholder="Log", lines=1, interactive=False)
             button_batch_process = gr.Button(value=process_symbol + " Batch", elem_id="button_batch")
