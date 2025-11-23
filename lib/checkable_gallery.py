@@ -1,5 +1,6 @@
 import gradio as gr
-from lib.image_dataset import ImageDataSet, load_media
+from lib.image_dataset import ImageDataSet
+from lib.media_cache import generate_thumbnail
 
 # Define CSS for a responsive grid layout
 custom_css = """
@@ -28,7 +29,7 @@ def _get_dataset(state_dict: dict) -> ImageDataSet | None:
 def checkable_gallery(state: gr.State):
     # Function to load images from paths
     def load_images(paths):
-        return [load_media(path) for path in paths]
+        return [generate_thumbnail(path) for path in paths]
 
     # Function to render the gallery with current images and checkboxes
     def render_gallery():
@@ -75,12 +76,13 @@ def checkable_gallery(state: gr.State):
         # Define button to refresh the gallery
         def refresh_gallery(state_dict: dict):
             dataset = _get_dataset(state_dict)
-            if dataset is None or not dataset.initialized:
+            if dataset is None or not dataset.is_initialized:
                 return checked_ids_output
 
             # Update the image paths or reload them dynamically if needed
             nonlocal images
-            images = load_images(dataset.media_paths)  # or set image_paths to new paths if dynamic
+            media_paths = [item.media_path for item in dataset]
+            images = load_images(media_paths)
 
             # Re-render the gallery with the new images
             render_gallery()

@@ -17,10 +17,10 @@ if __name__ == "__main__":
 
         print(f"Scanning {dir}")
         dataset = ImageDataSet()
-        dataset.load(path=dir_path, subdirectories=True, load_images=False)
+        dataset.load(path=dir_path, subdirectories=True, load_thumbnails=False)
 
-        print(f"Dataset size: {dataset.size()}")
-        registry[dir] = dataset.size()
+        print(f"Dataset size: {len(dataset)}")
+        registry[dir] = len(dataset)
 
     print("Registry:")
     for k, v in registry.items():

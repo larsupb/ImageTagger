@@ -4,7 +4,8 @@ import gradio as gr
 
 import config
 from lib.captioning import generate_caption, save_caption, TAGGERS
-from lib.image_dataset import ImageDataSet, load_media
+from lib.image_dataset import ImageDataSet
+from lib.media_cache import generate_thumbnail
 from lib.masking import ask_mask_from_model
 from lib.upscaling import upscale_image
 from tab_editing import process_symbol
@@ -22,23 +23,27 @@ def batch_process(rename, rename_offset, upscale, mask, captioning, tagger, stat
     log = ""
 
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized:
+    if dataset is None or not dataset.is_initialized:
         raise Exception("Dataset not initialized!")
 
     if rename:
         # create a compressed backup of the dataset
         dataset.backup()
 
-    for i in progress.tqdm(range(0, dataset.size())):
+    for i in progress.tqdm(range(0, len(dataset))):
         loader_data = load_index(i, state_dict)
         log += "Processing " + loader_data['path'] + "\n"
 
-        orig_media = load_media(loader_data['path'])
+        item = dataset.get_item(i)
+        if item is None:
+            continue
+
+        orig_media = generate_thumbnail(item.media_path)
         if rename:
-            new_path = dataset.rename_image(i, rename_offset)
-            if new_path is not None:
-                log += "Renamed to " + loader_data['path'] + " to  " + new_path + "\n"
-                loader_data['path'] = new_path
+            new_name = dataset.rename_item_numbered(i, rename_offset)
+            if new_name is not None:
+                log += "Renamed to " + loader_data['path'] + " to  " + new_name + "\n"
+                loader_data['path'] = new_name
             else:
                 log += "Failed to rename " + loader_data['path'] + "\n"
         if upscale:
@@ -50,14 +55,15 @@ def batch_process(rename, rename_offset, upscale, mask, captioning, tagger, stat
             loader_data['img_edit']['background'] = image
             # TODO: Actually the gradio image component should be updated
             # Remove mask if exists
-            if dataset.mask_support and loader_data['img_mask'] is not None:
-                mask_path = dataset.mask_paths(i)
-                if os.path.exists(mask_path):
+            if dataset.has_mask_support and loader_data['img_mask'] is not None:
+                mask_path = item.mask_path
+                if mask_path and os.path.exists(mask_path):
                     os.remove(mask_path)
                     loader_data['img_mask'] = None
         if mask:
-            mask = ask_mask_from_model(orig_media, 'u2net_human_seg')
-            mask.save(dataset.mask_paths(i))
+            generated_mask = ask_mask_from_model(orig_media, 'u2net_human_seg')
+            if item.mask_path:
+                generated_mask.save(item.mask_path)
 
         if captioning:
             # TODO: pass media object to captioning

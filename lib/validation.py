@@ -18,7 +18,7 @@ def _get_dataset(state_dict: dict) -> ImageDataSet | None:
 
 def validate_dataset(state_dict: dict, aspect_ratios=None):
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized or dataset.empty():
+    if dataset is None or not dataset.is_initialized or dataset.is_empty:
         return None
 
     if aspect_ratios is not None and len(aspect_ratios) > 0:

@@ -25,7 +25,7 @@ def tab_tools(state: gr.State):
             def process_copy(copy_options, target_directory, state_dict: dict):
                 log = ""
                 dataset = _get_dataset(state_dict)
-                if dataset is None or not dataset.initialized or dataset.size() == 0:
+                if dataset is None or not dataset.is_initialized or len(dataset) == 0:
                     log += "No dataset loaded\n"
                     return log
                 # Check if at least parent directory exists for the target directory
@@ -42,10 +42,10 @@ def tab_tools(state: gr.State):
                         return log
 
                 count = 0
-                for i in range(0, dataset.size()):
-                    if copy_options == 'Bookmarks only' and not dataset.is_bookmark(i):
+                for i in range(0, len(dataset)):
+                    if copy_options == 'Bookmarks only' and not dataset.is_bookmarked(i):
                         continue
-                    dataset.copy_media(i, target_directory)
+                    dataset.copy_item(i, target_directory)
                     count += 1
                 log += f"Copied {count} images\n"
                 return log

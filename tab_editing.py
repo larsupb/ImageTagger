@@ -48,20 +48,20 @@ class EditingControls(NamedTuple):
 
 def delete_image(current_index, state_dict: dict):
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized:
+    if dataset is None or not dataset.is_initialized:
         return gr.skip()
 
     if current_index > -1:
-        dataset.delete_image(current_index)
+        dataset.delete_item(current_index)
 
-    images_total = dataset.size()
+    images_total = len(dataset)
     if current_index > images_total - 1:
         current_index = max(current_index - 1, 0)
 
     slider_new = gr.Slider(value=current_index, minimum=0, maximum=images_total, label="Image index", step=1,
                            interactive=True)
     # open and rescale images to 0.5 megapixels
-    gallery = gr.Gallery(value=dataset.thumbnail_images, allow_preview=False, preview=False, columns=8, type="pil")
+    gallery = gr.Gallery(value=dataset.get_all_thumbnails(), allow_preview=False, preview=False, columns=8, type="pil")
 
     loader_data = load_index(current_index, state_dict)
     return gallery, slider_new, *list(loader_data.values())[1:]
@@ -70,11 +70,14 @@ def delete_image(current_index, state_dict: dict):
 def upscale_image_action(img_index: int, image_dict: EditorValue, state_dict: dict, upscaler_name: str,
                          progress=gr.Progress()) -> EditorValue:
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized:
+    if dataset is None or not dataset.is_initialized:
         return image_dict
 
-    img = dataset.media_paths[img_index]
-    img_out = upscale_image(img, upscaler_name, state_dict,
+    item = dataset.get_item(img_index)
+    if item is None:
+        return image_dict
+
+    img_out = upscale_image(item.media_path, upscaler_name, state_dict,
                             target_megapixels=config.upscale_target_megapixels(state_dict),
                             max_current_megapixels=config.upscale_target_megapixels(state_dict), progress=progress)
     state_dict["image_upscaled"] = img_out
@@ -85,10 +88,14 @@ def upscale_image_action(img_index: int, image_dict: EditorValue, state_dict: di
 
 def upscale_image_restore_action(index, image_dict: EditorValue, state_dict: dict) -> EditorValue:
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized:
+    if dataset is None or not dataset.is_initialized:
         return image_dict
 
-    img = Image.open(dataset.media_paths[index])
+    item = dataset.get_item(index)
+    if item is None:
+        return image_dict
+
+    img = Image.open(item.media_path)
     image_dict['background'] = img
     return image_dict
 
@@ -101,17 +108,21 @@ def remove_background_action(image_dict, state_dict) -> EditorValue:
 
 def generate_mask(index, image_dict: EditorValue, state_dict: dict) -> EditorValue:
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized or not dataset.mask_support:
+    if dataset is None or not dataset.is_initialized or not dataset.has_mask_support:
+        return EditorValue(background=None, layers=[], composite=None)
+
+    item = dataset.get_item(index)
+    if item is None:
         return EditorValue(background=None, layers=[], composite=None)
 
     # Use current editor background to maintain alignment with any modifications (e.g., upscaling)
     img = image_dict.get('background')
     if img is None:
-        img = Image.open(dataset.media_paths[index])
+        img = Image.open(item.media_path)
 
     # Load or generate mask
-    mask_path = dataset.mask_paths(index)
-    if os.path.exists(mask_path):
+    mask_path = item.mask_path
+    if mask_path and os.path.exists(mask_path):
         mask = Image.open(mask_path)
     else:
         mask = ask_mask_from_model(img, 'u2net_human_seg')
@@ -125,18 +136,23 @@ def generate_mask(index, image_dict: EditorValue, state_dict: dict) -> EditorVal
 
 def save_mask_action(index, editor_value: EditorValue, state_dict: dict):
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized or not dataset.mask_support:
+    if dataset is None or not dataset.is_initialized or not dataset.has_mask_support:
         return None
+
+    item = dataset.get_item(index)
+    if item is None or item.mask_path is None:
+        return None
+
     if editor_value["layers"] is not None:
         mask = editor_value["layers"][0]
         mask = mask.convert('RGB')
 
-        print('Saving ', dataset.mask_paths(index))
+        print('Saving ', item.mask_path)
         # The size of the mask must match the size of the image.
         # So read the image gather its size, resize the mask and save it
-        img_orig: PIL.Image = Image.open(dataset.media_paths[index])
+        img_orig: PIL.Image = Image.open(item.media_path)
         mask.resize(img_orig.size, resample=Image.Resampling.NEAREST)
-        mask.save(dataset.mask_paths(index))
+        mask.save(item.mask_path)
         return mask
     return None
 
@@ -156,7 +172,7 @@ def apply_mask_action(mask, image_dict: EditorValue):
 
 def save_image_action(index, state_dict):
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized:
+    if dataset is None or not dataset.is_initialized:
         return gr.skip()
 
     if state_dict.get("image_upscaled") and state_dict.get("image_upscaled_index") == index:
@@ -181,10 +197,10 @@ def align_visibility(image_editor, video_display):
 
 def set_bookmark(index, state_dict: dict):
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized:
+    if dataset is None or not dataset.is_initialized:
         return gr.update(value=bookmark_off)
 
-    if dataset.is_bookmark(index):
+    if dataset.is_bookmarked(index):
         return gr.update(value=bookmark_on)
     else:
         return gr.update(value=bookmark_off)
@@ -193,12 +209,15 @@ def set_bookmark(index, state_dict: dict):
 def start_rename(index, state_dict: dict):
     """Start rename mode: show the filename in an editable textbox."""
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized:
+    if dataset is None or not dataset.is_initialized:
         return gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip()
 
-    current_path = dataset.media_paths[index]
+    item = dataset.get_item(index)
+    if item is None:
+        return gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip()
+
     # Extract filename without extension
-    filename = os.path.splitext(os.path.basename(current_path))[0]
+    filename = item.basename
 
     return (
         gr.update(visible=False),  # Hide path textbox
@@ -212,10 +231,10 @@ def start_rename(index, state_dict: dict):
 def execute_rename(index, new_name, state_dict: dict):
     """Execute the rename and return to normal view."""
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized:
+    if dataset is None or not dataset.is_initialized:
         return gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip()
 
-    success, message, new_path = dataset.rename_image_to(index, new_name)
+    success, message, new_path = dataset.rename_item(index, new_name)
 
     if success:
         display_path = new_path
@@ -237,13 +256,15 @@ def execute_rename(index, new_name, state_dict: dict):
 def cancel_rename(index, state_dict: dict):
     """Cancel rename mode and restore original path display."""
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized:
+    if dataset is None or not dataset.is_initialized:
         return gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip()
 
-    current_path = dataset.media_paths[index]
+    item = dataset.get_item(index)
+    if item is None:
+        return gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip()
 
     return (
-        gr.update(value=current_path, visible=True),  # Show path textbox with original
+        gr.update(value=item.media_path, visible=True),  # Show path textbox with original
         gr.update(visible=False),  # Hide rename textbox
         gr.update(visible=True),   # Show Rename button
         gr.update(visible=False),  # Hide Save button

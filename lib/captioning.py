@@ -20,9 +20,14 @@ def _get_dataset(state_dict: dict) -> ImageDataSet | None:
 
 def generate_caption(current_index, option, state_dict):
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized:
+    if dataset is None or not dataset.is_initialized:
         return
-    path = dataset.media_paths[current_index]
+
+    item = dataset.get_item(current_index)
+    if item is None:
+        return ""
+
+    path = item.media_path
     caption = ""
     if os.path.exists(path):
         if option == 'joytag':
@@ -60,7 +65,7 @@ def save_caption(index, caption_text, file_name=None, dataset: ImageDataSet = No
     :param file_name: Optional file name to look up index
     :param dataset: ImageDataSet instance (required)
     """
-    if caption_text is None or dataset is None or not dataset.initialized:
+    if caption_text is None or dataset is None or not dataset.is_initialized:
         return
     if file_name is not None:
         index = dataset.find_index(file_name)

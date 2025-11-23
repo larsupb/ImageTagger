@@ -1,448 +1,745 @@
+"""
+ImageDataSet - Manages an image/video dataset with captions, masks, and thumbnails.
+
+This module provides a fully encapsulated dataset class for managing media collections
+with associated metadata. It is designed to be instantiated per-session and stored
+in gr.State for multi-user Gradio deployments.
+"""
+
 import json
-import math
 import os
 import shutil
 import zipfile
 from datetime import datetime
-from io import BytesIO
-from typing import List
+from typing import Dict, Iterator, List, Optional, Tuple, Callable, Any
 
-import PIL
-from PIL import Image
-import imageio
-
-VIDEO_EXTENSIONS = ('.mp4', '.avi', '.mov', '.mkv')
-IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.gif')
-
-def is_image(f):
-    return f.lower().endswith(IMAGE_EXTENSIONS)
-
-def is_video(f):
-    return f.lower().endswith(VIDEO_EXTENSIONS)
-
-
-def img_to_caption_path(file_path):
-    # replace file extension with .txt
-    return os.path.splitext(file_path)[0] + ".txt"
-
-
-def img_to_mask_path(f, mask_path):
-    # TODO: Think about absolut path issues
-    base_name = os.path.basename(f)
-    # remove the file extension because masks should always be .png
-    mask_file_name = os.path.splitext(base_name)[0] + ".png"
-    return os.path.join(mask_path, mask_file_name)
-
-
-def is_caption_existing(path):
-    caption_path = img_to_caption_path(path)
-    return os.path.exists(caption_path) and os.path.getsize(caption_path) > 0
-
-
-def not_filtered(file, ignore_list: list):
-    return not any([ignore_pattern in file for ignore_pattern in ignore_list])
-
-
-def resize_to_target_megapixels(image: PIL.Image.Image, megapixels=0.5) -> PIL.Image.Image:
-    """
-    Resize the image to a target number of megapixels while maintaining the aspect ratio.
-    """
-    width, height = image.size
-    aspect_ratio = width / height
-
-    # Calculate the new dimensions to get close to 1 megapixel
-    target_pixels = 1_000_000 * megapixels
-    target_height = int(math.sqrt(target_pixels / aspect_ratio))
-    target_width = int(target_height * aspect_ratio)
-
-    return image.resize((target_width, target_height))
-
-
-import imageio
-import hashlib
 from PIL import Image
 
-
-def _cache_path(path, max_frames, step, duration) -> str:
-    """
-    Build a unique cache file path for given video + parameters.
-    """
-    base_dir = os.getcwd()  # project dir
-    cache_dir = os.path.join(base_dir, ".cache")
-    os.makedirs(cache_dir, exist_ok=True)
-
-    # make a unique hash from params (safe for long paths)
-    key = f"{path}-{max_frames}-{step}-{duration}"
-    key_hash = hashlib.md5(key.encode("utf-8")).hexdigest()
-    return os.path.join(cache_dir, f"{key_hash}.gif")
+from lib.media_item import MediaItem, is_image, is_video, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
+from lib.media_cache import generate_thumbnail
 
 
-def _resize_and_crop(img, size=128):
-    """
-    Resize image keeping aspect ratio, then center crop to (size x size).
-    """
-    w, h = img.size
-    scale = size / min(w, h)
-    new_w, new_h = int(w * scale), int(h * scale)
-    img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-
-    left = (new_w - size) // 2
-    top = (new_h - size) // 2
-    right = left + size
-    bottom = top + size
-
-    return img.crop((left, top, right, bottom))
-
-def load_media(path, max_frames=32, step=2, duration=100, size=128) -> str | None:
-    """
-    Load media and return either an Image (for images) or an animated GIF (for videos).
-
-    Args:
-        path (str): Path to the media file.
-        max_frames (int): Maximum number of frames to extract from the video.
-        step (int): Take every nth frame to reduce GIF size.
-        duration (int): Duration of each frame in ms for the GIF.
-    """
-    cache_file = _cache_path(path, max_frames, step, duration)
-    if os.path.exists(cache_file):
-        return cache_file
-
-    if is_video(path):
-        try:
-            # Video was not cached, process it now
-            video = imageio.get_reader(path)
-            frames = []
-            for i, frame in enumerate(video):
-                if i % step == 0:
-                    img = Image.fromarray(frame)
-                    img = _resize_and_crop(img, size=size)
-                    frames.append(img)
-                if len(frames) >= max_frames:
-                    break
-
-            if not frames:
-                raise ValueError("No frames extracted")
-
-            # Convert frames to GIF in memory (PIL animated GIF)
-            frames[0].info['duration'] = duration
-            frames[0].info['loop'] = 0
-            gif_bytes = BytesIO()
-            frames[0].save(gif_bytes, save_all=True, format="GIF",
-                           append_images=frames[1:], duration=100, loop=0)
-            gif_bytes.seek(0)
-
-            # also persist to cache folder
-            with open(cache_file, "wb") as f:
-                f.write(gif_bytes.getbuffer())
-            return cache_file
-        except Exception as e:
-            print(f"Error reading video {path}: {e}")
-            return None
-    elif is_image(path):
-        img = Image.open(path)
-        img = resize_to_target_megapixels(img, 0.2)
-        cache_file = _cache_path(path, max_frames, step, duration)
-        # Save a copy to the cache folder
-        img.save(cache_file)
-        return cache_file
-
-    return None
+def _not_filtered(file: str, ignore_list: List[str]) -> bool:
+    """Check if a file should not be filtered out based on ignore patterns."""
+    return not any(ignore_pattern in file for ignore_pattern in ignore_list)
 
 
 class ImageDataSet:
     """
     Manages an image/video dataset with captions, masks, and thumbnails.
 
-    This class is designed to be instantiated per-session and stored in gr.State
-    for multi-user Gradio deployments.
+    This class provides a fully encapsulated interface for managing media collections.
+    All access to internal data goes through properties and methods.
+
+    Example usage:
+        dataset = ImageDataSet()
+        dataset.load("/path/to/images", masks_dir="/path/to/masks")
+
+        for item in dataset:
+            print(item.filename)
+
+        caption = dataset.read_caption(0)
+        dataset.save_caption(0, "new caption text")
     """
 
     def __init__(self):
-        self.base_dir: str = ""
-        self.media_paths = []
-        self.thumbnail_images = []
-        self.caption_paths = []
-        self.caption_texts = dict()
-        self.initialized = False
-        self.mask_support = False
-        self.masks_path = None
-        self.bookmarks = {}
+        """Initialize an empty dataset."""
+        self._items: List[MediaItem] = []
+        self._caption_cache: Dict[str, str] = {}
+        self._bookmarks: Dict[str, bool] = {}
+        self._base_dir: str = ""
+        self._masks_dir: Optional[str] = None
+        self._initialized: bool = False
 
+    # =========================================================================
+    # Properties (read-only access)
+    # =========================================================================
 
-    def load(self, path, masks_path=None, only_missing_captions=False, ignore_list=None, subdirectories=False,
-             load_images=True):
+    @property
+    def is_initialized(self) -> bool:
+        """Check if the dataset has been successfully loaded."""
+        return self._initialized
+
+    @property
+    def is_empty(self) -> bool:
+        """Check if the dataset contains no items."""
+        return len(self._items) == 0
+
+    @property
+    def count(self) -> int:
+        """Return the number of items in the dataset."""
+        return len(self._items)
+
+    @property
+    def base_dir(self) -> str:
+        """Return the base directory of the dataset."""
+        return self._base_dir
+
+    @property
+    def masks_dir(self) -> Optional[str]:
+        """Return the masks directory, if configured."""
+        return self._masks_dir
+
+    @property
+    def has_mask_support(self) -> bool:
+        """Check if mask support is enabled for this dataset."""
+        return self._masks_dir is not None
+
+    # =========================================================================
+    # Container protocol methods
+    # =========================================================================
+
+    def __len__(self) -> int:
+        """Return the number of items in the dataset."""
+        return len(self._items)
+
+    def __getitem__(self, index: int) -> MediaItem:
+        """
+        Get a MediaItem by index.
+
+        Args:
+            index: The index of the item to retrieve
+
+        Returns:
+            The MediaItem at the given index
+
+        Raises:
+            IndexError: If the index is out of bounds
+        """
+        return self._items[index]
+
+    def __iter__(self) -> Iterator[MediaItem]:
+        """Iterate over all MediaItems in the dataset."""
+        return iter(self._items)
+
+    def __bool__(self) -> bool:
+        """Return True if the dataset is initialized and non-empty."""
+        return self._initialized and len(self._items) > 0
+
+    # =========================================================================
+    # Item access methods
+    # =========================================================================
+
+    def get_item(self, index: int) -> Optional[MediaItem]:
+        """
+        Safely get a MediaItem by index.
+
+        Args:
+            index: The index of the item to retrieve
+
+        Returns:
+            The MediaItem at the given index, or None if index is invalid
+        """
+        if not self._initialized or index < 0 or index >= len(self._items):
+            return None
+        return self._items[index]
+
+    def get_media_path(self, index: int) -> Optional[str]:
+        """
+        Get the media file path for an item by index.
+
+        Args:
+            index: The index of the item
+
+        Returns:
+            The media file path, or None if index is invalid
+        """
+        item = self.get_item(index)
+        return item.media_path if item else None
+
+    def get_caption_path(self, index: int) -> Optional[str]:
+        """
+        Get the caption file path for an item by index.
+
+        Args:
+            index: The index of the item
+
+        Returns:
+            The caption file path, or None if index is invalid
+        """
+        item = self.get_item(index)
+        return item.caption_path if item else None
+
+    def get_mask_path(self, index: int) -> Optional[str]:
+        """
+        Get the mask file path for an item by index.
+
+        Args:
+            index: The index of the item
+
+        Returns:
+            The mask file path, or None if index is invalid or no mask support
+        """
+        item = self.get_item(index)
+        return item.mask_path if item else None
+
+    def get_thumbnail(self, index: int) -> Optional[str]:
+        """
+        Get the thumbnail path for an item by index.
+
+        Args:
+            index: The index of the item
+
+        Returns:
+            The thumbnail path, or None if index is invalid or no thumbnail
+        """
+        item = self.get_item(index)
+        return item.thumbnail_path if item else None
+
+    def get_all_thumbnails(self) -> List[Optional[str]]:
+        """
+        Get all thumbnail paths in the dataset.
+
+        Returns:
+            List of thumbnail paths (some may be None if generation failed)
+        """
+        return [item.thumbnail_path for item in self._items]
+
+    def find_index(self, path: str) -> int:
+        """
+        Find the index of an item by its media path.
+
+        Args:
+            path: The media file path to search for
+
+        Returns:
+            The index of the item
+
+        Raises:
+            ValueError: If the path is not found
+        """
+        for i, item in enumerate(self._items):
+            if item.media_path == path:
+                return i
+        raise ValueError(f"Path not found: {path}")
+
+    # =========================================================================
+    # Dataset loading and management
+    # =========================================================================
+
+    def load(
+        self,
+        path: str,
+        masks_dir: Optional[str] = None,
+        only_missing_captions: bool = False,
+        ignore_list: Optional[List[str]] = None,
+        subdirectories: bool = False,
+        load_thumbnails: bool = True
+    ) -> None:
+        """
+        Load a dataset from a directory.
+
+        Args:
+            path: Path to the directory containing media files
+            masks_dir: Optional path to directory containing mask files
+            only_missing_captions: If True, only load images without captions
+            ignore_list: List of patterns to ignore in filenames
+            subdirectories: If True, search subdirectories recursively
+            load_thumbnails: If True, generate thumbnails for gallery display
+        """
         if ignore_list is None:
             ignore_list = []
 
-        self.media_paths = []
-        self.caption_paths = []
-        self.caption_texts = {}
-        self.bookmarks = {}
-        self.initialized = path and os.path.exists(path)
+        # Reset state
+        self._items = []
+        self._caption_cache = {}
+        self._bookmarks = {}
+        self._initialized = path and os.path.exists(path)
 
-        if not self.initialized:
+        if not self._initialized:
             return
 
-        self.base_dir = path
-        self.mask_support = bool(masks_path)
-        self.masks_path = masks_path
+        self._base_dir = path
+        self._masks_dir = masks_dir
 
-        if self.mask_support and not os.path.exists(masks_path):
-            os.makedirs(masks_path)
+        # Create masks directory if needed
+        if self._masks_dir and not os.path.exists(self._masks_dir):
+            os.makedirs(self._masks_dir)
 
-        def should_include(file_path, file_name):
+        def should_include(file_path: str, file_name: str) -> bool:
             if not (is_image(file_name) or is_video(file_name)):
                 return False
-            if not_filtered(file_name, ignore_list):
-                if only_missing_captions:
-                    return not is_caption_existing(file_path)
-                return True
-            return False
+            if not _not_filtered(file_name, ignore_list):
+                return False
+            if only_missing_captions:
+                item = MediaItem.from_media_path(file_path, self._masks_dir)
+                return not item.caption_exists()
+            return True
 
+        # Collect media files
+        media_paths = []
         for root, dirs, files in os.walk(path):
             if not subdirectories and root != path:
                 continue
             for file_name in files:
                 full_path = os.path.join(root, file_name)
                 if should_include(full_path, file_name):
-                    self.media_paths.append(full_path)
+                    media_paths.append(full_path)
 
-        self.media_paths.sort()
-        self.caption_paths = [img_to_caption_path(f) for f in self.media_paths]
+        media_paths.sort()
 
-        if load_images:
-            self.thumbnail_images = [load_media(p) for p in self.media_paths]
+        # Create MediaItem instances
+        for media_path in media_paths:
+            item = MediaItem.from_media_path(media_path, self._masks_dir)
+            if load_thumbnails:
+                item.thumbnail_path = generate_thumbnail(media_path)
+            self._items.append(item)
 
-        bookmarks_path = os.path.join(self.base_dir, "bookmarks.json")
+        # Load bookmarks
+        bookmarks_path = os.path.join(self._base_dir, "bookmarks.json")
         if os.path.exists(bookmarks_path):
-            self.bookmarks = json.load(open(bookmarks_path, "r", encoding="utf8"))
+            with open(bookmarks_path, "r", encoding="utf8") as f:
+                self._bookmarks = json.load(f)
 
-    def prune(self, path, subdirectories=False):
-        # scan the directory recursively and remove the captions who do not belong to an image
+    def prune_orphaned_captions(self, path: Optional[str] = None, subdirectories: bool = False) -> int:
+        """
+        Remove caption files that don't have a corresponding media file.
+
+        Args:
+            path: Directory to scan (defaults to base_dir)
+            subdirectories: If True, scan subdirectories recursively
+
+        Returns:
+            Number of orphaned captions removed
+        """
+        if path is None:
+            path = self._base_dir
+
+        removed_count = 0
         for root, dirs, files in os.walk(path):
-            # skip subdirectories if parameter subdirectories is False
             if not subdirectories and root != path:
                 continue
             for f in files:
-                full_path = os.path.join(root, f)
-                # continue if file is no txt file
                 if not f.lower().endswith('.txt'):
                     continue
-                # check if there exists an image file with the same name
-                media_path = os.path.splitext(full_path)[0]
-                # append potential media file extensions
-                media_path = [media_path + ext for ext in VIDEO_EXTENSIONS + IMAGE_EXTENSIONS]
-                # remove the caption file if no media file exists
-                if not any([os.path.exists(img) for img in media_path]):
+                full_path = os.path.join(root, f)
+                media_base = os.path.splitext(full_path)[0]
+                potential_media = [media_base + ext for ext in VIDEO_EXTENSIONS + IMAGE_EXTENSIONS]
+                if not any(os.path.exists(p) for p in potential_media):
                     os.remove(full_path)
+                    removed_count += 1
 
-    def empty(self):
-        return len(self.media_paths) == 0
+        return removed_count
 
-    def mask_paths(self, index):
-        mask_path = img_to_mask_path(self.media_paths[index], self.masks_path)
-        return mask_path
+    # =========================================================================
+    # Caption operations
+    # =========================================================================
 
-    def size(self):
-        return len(self.media_paths)
-
-    def backup(self):
-        # create a compressed backup of the dataset
-        # take the content of the data directory and compress it
-        to_compress = self.media_paths + self.caption_paths
-        # create an archive file with the images and captions
-        # store it in the data directory
-        target_dir = os.path.dirname(self.media_paths[0])
-        date = datetime.now().strftime("%Y%m%d_%H%M%S")
-        with zipfile.ZipFile(os.path.join(target_dir, 'dataset_backup_' + date + '.zip'), 'w') as zipf:
-            for f in to_compress:
-                if os.path.exists(f):
-                    zipf.write(f, os.path.basename(f), compress_type=zipfile.ZIP_DEFLATED)
-
-    def delete_image(self, current_index):
-        os.remove(self.media_paths[current_index])
-        if os.path.exists(self.mask_paths(current_index)):
-            os.remove(self.mask_paths(current_index))
-        if os.path.exists(self.caption_paths[current_index]):
-            os.remove(self.caption_paths[current_index])
-
-        del self.media_paths[current_index]
-        del self.thumbnail_images[current_index]
-        del self.caption_paths[current_index]
-
-    def rename_image(self, current_index, offset):
-        '''
-        Rename to 5 digit number
-        '''
-        new_name = str(offset + current_index).zfill(5)
-        new_image_path = os.path.join(os.path.dirname(self.media_paths[current_index]),
-                                      new_name + self.curate_file_extension(current_index))
-        new_caption_path = img_to_caption_path(new_image_path)
-        new_mask_path = img_to_mask_path(new_image_path, self.masks_path)
-
-        if not os.path.exists(new_image_path):
-            os.rename(self.media_paths[current_index], new_image_path)
-            if os.path.exists(self.caption_paths[current_index]):
-                os.rename(self.caption_paths[current_index], new_caption_path)
-            if os.path.exists(self.mask_paths(current_index)):
-                os.rename(self.mask_paths(current_index), new_mask_path)
-
-            # update the paths in the dataset
-            self.media_paths[current_index] = new_image_path
-            self.caption_paths[current_index] = new_caption_path
-            return new_name
-        else:
-            print("File already exists, skipping rename")
-            return None
-
-    def curate_file_extension(self, current_index):
-        extension = os.path.splitext(self.media_paths[current_index])[1]
-        if extension.lower() in ['.jpg', '.jpeg']:
-            extension = '.jpg'
-        return extension
-
-    def rename_image_to(self, current_index, new_name):
+    def read_caption(self, index: int) -> str:
         """
-        Rename an image to a user-specified name (without extension).
-        Also renames associated caption and mask files.
+        Read the caption text for an item.
 
         Args:
-            current_index: Index of the image in the dataset
+            index: The index of the item
+
+        Returns:
+            The caption text, or empty string if not found
+        """
+        item = self.get_item(index)
+        if not item:
+            return ""
+
+        caption_text = ""
+        if os.path.exists(item.caption_path):
+            with open(item.caption_path, 'r', encoding='utf-8') as f:
+                caption_text = f.read()
+
+        self._caption_cache[item.caption_path] = caption_text
+        return caption_text
+
+    def read_tags(self, index: int) -> List[str]:
+        """
+        Read and parse the caption into individual tags.
+
+        Args:
+            index: The index of the item
+
+        Returns:
+            List of tags (comma-separated values from caption)
+        """
+        caption = self.read_caption(index)
+        tags = caption.split(",")
+        tags = [tag.strip() for tag in tags]
+        tags = [tag for tag in tags if tag]
+        return tags
+
+    def save_caption(self, index: int, new_text: str) -> bool:
+        """
+        Save caption text for an item.
+
+        Args:
+            index: The index of the item
+            new_text: The new caption text to save
+
+        Returns:
+            True if saved successfully, False otherwise
+        """
+        item = self.get_item(index)
+        if not item:
+            return False
+
+        # Only save if text has changed
+        cached = self._caption_cache.get(item.caption_path, None)
+        if cached is not None and cached == new_text:
+            return True
+
+        with open(item.caption_path, 'w', encoding='utf-8') as f:
+            f.write(new_text)
+
+        self._caption_cache[item.caption_path] = new_text
+        return True
+
+    # =========================================================================
+    # File operations
+    # =========================================================================
+
+    def delete_item(self, index: int) -> bool:
+        """
+        Delete an item and all associated files.
+
+        Args:
+            index: The index of the item to delete
+
+        Returns:
+            True if deleted successfully, False otherwise
+        """
+        item = self.get_item(index)
+        if not item:
+            return False
+
+        # Delete media file
+        if os.path.exists(item.media_path):
+            os.remove(item.media_path)
+
+        # Delete mask file if exists
+        if item.mask_exists():
+            os.remove(item.mask_path)
+
+        # Delete caption file if exists
+        if os.path.exists(item.caption_path):
+            os.remove(item.caption_path)
+
+        # Remove from caption cache
+        self._caption_cache.pop(item.caption_path, None)
+
+        # Remove from items list
+        del self._items[index]
+
+        return True
+
+    def rename_item(self, index: int, new_name: str) -> Tuple[bool, str, Optional[str]]:
+        """
+        Rename an item to a user-specified name.
+
+        Args:
+            index: The index of the item to rename
             new_name: New filename without extension
 
         Returns:
-            tuple: (success: bool, message: str, new_path: str or None)
+            Tuple of (success, message, new_path or None)
         """
-        if not self.initialized or current_index < 0 or current_index >= len(self.media_paths):
-            return False, "Dataset not initialized or invalid index", None
+        item = self.get_item(index)
+        if not item:
+            return False, "Invalid index or dataset not initialized", None
 
-        # Validate filename
         new_name = new_name.strip()
         if not new_name:
             return False, "Filename cannot be empty", None
 
-        # Check for invalid characters
         invalid_chars = '/\\:*?"<>|'
         if any(c in new_name for c in invalid_chars):
             return False, f"Filename contains invalid characters: {invalid_chars}", None
 
-        current_path = self.media_paths[current_index]
-        parent_dir = os.path.dirname(current_path)
-        extension = self.curate_file_extension(current_index)
+        new_media_path = os.path.join(item.directory, new_name + item.extension)
+        new_caption_path = os.path.splitext(new_media_path)[0] + ".txt"
 
-        new_image_path = os.path.join(parent_dir, new_name + extension)
-        new_caption_path = img_to_caption_path(new_image_path)
-
-        # Check if target already exists (and it's not the same file)
-        if os.path.exists(new_image_path) and new_image_path != current_path:
+        # Check for existing file (unless it's the same file)
+        if os.path.exists(new_media_path) and new_media_path != item.media_path:
             return False, "A file with this name already exists", None
 
-        # If renaming to the same name, just return success
-        if new_image_path == current_path:
-            return True, "No changes made", new_image_path
+        # No changes needed
+        if new_media_path == item.media_path:
+            return True, "No changes made", new_media_path
 
         try:
-            # Rename the image file
-            os.rename(current_path, new_image_path)
+            # Rename media file
+            os.rename(item.media_path, new_media_path)
 
-            # Rename caption file if it exists
-            old_caption_path = self.caption_paths[current_index]
-            if os.path.exists(old_caption_path):
-                os.rename(old_caption_path, new_caption_path)
+            # Rename caption file if exists
+            if os.path.exists(item.caption_path):
+                os.rename(item.caption_path, new_caption_path)
 
-            # Rename mask file if it exists
-            if self.mask_support:
-                old_mask_path = self.mask_paths(current_index)
-                new_mask_path = img_to_mask_path(new_image_path, self.masks_path)
-                if os.path.exists(old_mask_path):
-                    os.rename(old_mask_path, new_mask_path)
+            # Rename mask file if exists
+            if item.mask_exists():
+                new_mask_path = os.path.join(
+                    self._masks_dir,
+                    os.path.splitext(new_name)[0] + ".png"
+                ) if self._masks_dir else None
+                if new_mask_path:
+                    os.rename(item.mask_path, new_mask_path)
 
-            # Update caption_texts dict if the old path was cached
-            if old_caption_path in self.caption_texts:
-                self.caption_texts[new_caption_path] = self.caption_texts.pop(old_caption_path)
+            # Update caption cache
+            if item.caption_path in self._caption_cache:
+                self._caption_cache[new_caption_path] = self._caption_cache.pop(item.caption_path)
 
-            # Update internal paths
-            self.media_paths[current_index] = new_image_path
-            self.caption_paths[current_index] = new_caption_path
+            # Update item paths
+            item.update_paths_after_rename(new_media_path, self._masks_dir)
 
-            return True, "File renamed successfully", new_image_path
+            return True, "File renamed successfully", new_media_path
 
         except OSError as e:
             return False, f"Error renaming file: {str(e)}", None
 
-    def scan(self, func):
-        if not self.initialized:
+    def rename_item_numbered(self, index: int, offset: int = 0) -> Optional[str]:
+        """
+        Rename an item to a 5-digit numbered format.
+
+        Args:
+            index: The index of the item to rename
+            offset: Offset to add to the index for numbering
+
+        Returns:
+            The new name if successful, None otherwise
+        """
+        item = self.get_item(index)
+        if not item:
+            return None
+
+        new_name = str(offset + index).zfill(5)
+        success, message, new_path = self.rename_item(index, new_name)
+
+        if success and new_path:
+            return new_name
+        else:
+            print(message)
+            return None
+
+    def copy_item(self, index: int, target_dir: str) -> bool:
+        """
+        Copy an item and its caption to a target directory.
+
+        Args:
+            index: The index of the item to copy
+            target_dir: Target directory path
+
+        Returns:
+            True if copied successfully, False otherwise
+        """
+        item = self.get_item(index)
+        if not item:
+            return False
+
+        if not os.path.exists(target_dir):
+            os.makedirs(target_dir)
+
+        shutil.copy2(item.media_path, target_dir)
+        if os.path.exists(item.caption_path):
+            shutil.copy2(item.caption_path, target_dir)
+
+        return True
+
+    def update_image(self, index: int, new_image: Image.Image) -> bool:
+        """
+        Update an image with a new PIL Image.
+
+        Args:
+            index: The index of the item to update
+            new_image: The new PIL Image
+
+        Returns:
+            True if updated successfully, False otherwise
+        """
+        item = self.get_item(index)
+        if not item:
+            return False
+
+        new_image.save(item.media_path)
+
+        # Update thumbnail
+        item.thumbnail_path = generate_thumbnail(item.media_path)
+
+        return True
+
+    # =========================================================================
+    # Bookmark operations
+    # =========================================================================
+
+    def is_bookmarked(self, index: int) -> bool:
+        """
+        Check if an item is bookmarked.
+
+        Args:
+            index: The index of the item
+
+        Returns:
+            True if bookmarked, False otherwise
+        """
+        item = self.get_item(index)
+        if not item:
+            return False
+
+        return self._bookmarks.get(item.filename, False)
+
+    def set_bookmark(self, index: int, value: bool) -> None:
+        """
+        Set the bookmark status for an item.
+
+        Args:
+            index: The index of the item
+            value: True to bookmark, False to unbookmark
+        """
+        item = self.get_item(index)
+        if not item:
+            return
+
+        self._bookmarks[item.filename] = value
+        self._save_bookmarks()
+
+    def toggle_bookmark(self, index: int) -> bool:
+        """
+        Toggle the bookmark status for an item.
+
+        Args:
+            index: The index of the item
+
+        Returns:
+            The new bookmark status
+        """
+        current = self.is_bookmarked(index)
+        new_status = not current
+        self.set_bookmark(index, new_status)
+        return new_status
+
+    def _save_bookmarks(self) -> None:
+        """Save bookmarks to the bookmarks.json file."""
+        if not self._base_dir:
+            return
+        bookmarks_path = os.path.join(self._base_dir, "bookmarks.json")
+        with open(bookmarks_path, "w", encoding="utf8") as f:
+            json.dump(self._bookmarks, f, indent=4)
+
+    # =========================================================================
+    # Dataset operations
+    # =========================================================================
+
+    def backup(self) -> Optional[str]:
+        """
+        Create a compressed backup of all media and caption files.
+
+        Returns:
+            Path to the backup file, or None if failed
+        """
+        if not self._initialized or self.is_empty:
+            return None
+
+        to_compress = []
+        for item in self._items:
+            to_compress.append(item.media_path)
+            if os.path.exists(item.caption_path):
+                to_compress.append(item.caption_path)
+
+        target_dir = self._base_dir
+        date = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = os.path.join(target_dir, f'dataset_backup_{date}.zip')
+
+        with zipfile.ZipFile(backup_path, 'w') as zipf:
+            for f in to_compress:
+                if os.path.exists(f):
+                    zipf.write(f, os.path.basename(f), compress_type=zipfile.ZIP_DEFLATED)
+
+        return backup_path
+
+    def scan(self, func: Callable[[int, str, Optional[str], Optional[str]], Any]) -> List[Any]:
+        """
+        Scan through all items and apply a function to each.
+
+        Args:
+            func: Function taking (index, media_path, mask_path, caption_path)
+
+        Returns:
+            List of results from applying func to each item
+        """
+        if not self._initialized:
             raise Exception("Dataset not initialized!")
 
-        output = []
-        for i, image_path in enumerate(self.media_paths):
-            mask_paths = self.mask_paths(i)
-            if not os.path.exists(mask_paths):
-                mask_paths = None
-            caption_path = self.caption_paths[i]
-            if not os.path.exists(caption_path):
-                caption_path = None
-            output.append(func(i, image_path, mask_paths, caption_path))
-        return output
+        results = []
+        for i, item in enumerate(self._items):
+            mask_path = item.mask_path if item.mask_exists() else None
+            caption_path = item.caption_path if os.path.exists(item.caption_path) else None
+            results.append(func(i, item.media_path, mask_path, caption_path))
 
-    def read_caption_at(self, index):
-        caption_path = self.caption_paths[index]
-        caption_text = ""
-        if os.path.exists(caption_path):
-            with open(caption_path, 'r') as f:
-                caption_text = f.read()
-        self.caption_texts[caption_path] = caption_text
-        return caption_text
+        return results
 
-    def read_tags_at(self, index) -> List[str]:
-        caption = self.read_caption_at(index)
-        # split the caption into tags
-        tags = caption.split(",")
-        # trim the tags
-        tags = [x.strip() for x in tags]
-        # remove empty tags
-        tags = [x for x in tags if x]
-        return tags
+    # =========================================================================
+    # Legacy compatibility (deprecated - will be removed in future versions)
+    # =========================================================================
 
-    def save_caption(self, index, new_text):
-        if not self.initialized or index < 0:
-            return
-        caption_path = self.caption_paths[index]
-        if caption_path not in self.caption_texts:
-            return
-        if self.caption_texts[caption_path] != new_text:
-            with open(caption_path, 'w') as f:
-                f.write(new_text)
+    @property
+    def initialized(self) -> bool:
+        """Deprecated: Use is_initialized instead."""
+        return self._initialized
 
-    def find_index(self, path):
-        return self.media_paths.index(path)
+    @property
+    def mask_support(self) -> bool:
+        """Deprecated: Use has_mask_support instead."""
+        return self.has_mask_support
 
-    def update_image(self, index, new_image):
-        if not self.initialized or index < 0 or index >= len(self.media_paths):
-            return
-        new_image.save(self.media_paths[index])
-        self.thumbnail_images[index] = resize_to_target_megapixels(new_image, 0.2)
+    def size(self) -> int:
+        """Deprecated: Use len(dataset) or dataset.count instead."""
+        return len(self._items)
 
-    def is_bookmark(self, index):
-        image_file_name = os.path.basename(self.media_paths[index])
-        return image_file_name in self.bookmarks and self.bookmarks[image_file_name]
+    def empty(self) -> bool:
+        """Deprecated: Use dataset.is_empty instead."""
+        return self.is_empty
 
-    def toggle_bookmark(self, index, value: bool):
-        image_file_name = os.path.basename(self.media_paths[index])
-        self.bookmarks[image_file_name] = value
+    def mask_paths(self, index: int) -> Optional[str]:
+        """Deprecated: Use get_mask_path(index) instead."""
+        return self.get_mask_path(index)
 
-        with open(os.path.join(self.base_dir, "bookmarks.json"), "w", encoding="utf8") as f:
-            json.dump(self.bookmarks, f, indent=4)
+    def read_caption_at(self, index: int) -> str:
+        """Deprecated: Use read_caption(index) instead."""
+        return self.read_caption(index)
 
-    def copy_media(self, index, target_directory):
-        if not self.initialized or index < 0 or index >= len(self.media_paths):
-            return
-        if not os.path.exists(target_directory):
-            os.makedirs(target_directory)
-        shutil.copy2(self.media_paths[index], target_directory)
-        if os.path.exists(self.caption_paths[index]):
-            shutil.copy2(self.caption_paths[index], target_directory)
+    def read_tags_at(self, index: int) -> List[str]:
+        """Deprecated: Use read_tags(index) instead."""
+        return self.read_tags(index)
 
-# Note: The singleton INSTANCE has been removed.
-# ImageDataSet instances should now be created per-session and stored in gr.State.
-# This enables proper multi-user support in Gradio deployments.
+    def delete_image(self, index: int) -> bool:
+        """Deprecated: Use delete_item(index) instead."""
+        return self.delete_item(index)
+
+    def rename_image(self, index: int, offset: int) -> Optional[str]:
+        """Deprecated: Use rename_item_numbered(index, offset) instead."""
+        return self.rename_item_numbered(index, offset)
+
+    def rename_image_to(self, index: int, new_name: str) -> Tuple[bool, str, Optional[str]]:
+        """Deprecated: Use rename_item(index, new_name) instead."""
+        return self.rename_item(index, new_name)
+
+    def copy_media(self, index: int, target_dir: str) -> bool:
+        """Deprecated: Use copy_item(index, target_dir) instead."""
+        return self.copy_item(index, target_dir)
+
+    @property
+    def media_paths(self) -> List[str]:
+        """Deprecated: Direct access to media_paths. Use get_media_path(index) or iterate over items."""
+        return [item.media_path for item in self._items]
+
+    @property
+    def caption_paths(self) -> List[str]:
+        """Deprecated: Direct access to caption_paths. Use get_caption_path(index) instead."""
+        return [item.caption_path for item in self._items]
+
+    @property
+    def thumbnail_images(self) -> List[Optional[str]]:
+        """Deprecated: Direct access to thumbnails. Use get_all_thumbnails() instead."""
+        return self.get_all_thumbnails()
+
+    @property
+    def masks_path(self) -> Optional[str]:
+        """Deprecated: Use masks_dir instead."""
+        return self._masks_dir
+
+    def prune(self, path: str, subdirectories: bool = False) -> int:
+        """Deprecated: Use prune_orphaned_captions(path, subdirectories) instead."""
+        return self.prune_orphaned_captions(path, subdirectories)

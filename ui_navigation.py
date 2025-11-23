@@ -1,4 +1,3 @@
-import json
 import os
 import shutil
 import tempfile
@@ -8,7 +7,8 @@ import gradio as gr
 from PIL import Image
 
 import config
-from lib.image_dataset import ImageDataSet, load_media, is_video
+from lib.image_dataset import ImageDataSet
+from lib.media_item import is_video
 
 
 def init_dataset(path: str, masks_path: str, filter_missing_captions: bool, subdirectories: bool, load_gallery: bool, state_dict: dict):
@@ -26,20 +26,20 @@ def init_dataset(path: str, masks_path: str, filter_missing_captions: bool, subd
     """
     # Create new dataset instance for this session
     dataset = ImageDataSet()
-    dataset.prune(path, subdirectories)
+    dataset.prune_orphaned_captions(path, subdirectories)
     dataset.load(path, masks_path, filter_missing_captions, config.ignore_list(state_dict), subdirectories, load_gallery)
 
     # Store dataset in state for per-session access
     state_dict['dataset'] = dataset
 
-    if dataset.size() == 0:
+    if len(dataset) == 0:
         return gr.skip()
 
     loader_data = _navigate_forward_internal(-1, None, dataset)
-    images_total = dataset.size() - 1
+    images_total = len(dataset) - 1
     slider_new = gr.Slider(value=0, minimum=0, maximum=images_total, label="Image index", step=1, interactive=True)
 
-    gallery = gr.Gallery(value=dataset.thumbnail_images if load_gallery else [], allow_preview=False, preview=False, columns=8, type="pil")
+    gallery = gr.Gallery(value=dataset.get_all_thumbnails() if load_gallery else [], allow_preview=False, preview=False, columns=8, type="pil")
     return gallery, slider_new, *list(loader_data[1:]), state_dict
 
 
@@ -58,11 +58,15 @@ def load_index(index, state_dict: dict) -> dict:
     :return: dictionary contains index, dataset_size, path, byte_size_str, dimensions, caption_text, img_edit, img_mask
     """
     dataset = _get_dataset(state_dict)
-    if index < 0 or dataset is None or not dataset.initialized:
+    if index < 0 or dataset is None or not dataset.is_initialized:
         return {}
 
-    path = dataset.media_paths[index]
-    mask_path = dataset.mask_paths(index)
+    item = dataset.get_item(index)
+    if item is None:
+        return {}
+
+    path = item.media_path
+    mask_path = item.mask_path
 
     img_edit = dict()
     img_edit["composite"] = None
@@ -74,40 +78,38 @@ def load_index(index, state_dict: dict) -> dict:
         img_byte_size = os.path.getsize(path)
 
         # Determine dimensions
-        if is_video(path):
+        if item.is_video:
             dimensions = "Video"
         else:
             media = PIL.Image.open(path)
             dimensions = f'{media.size[0]} x {media.size[1]}'
-
-            image_ext = os.path.splitext(path)[1]
             img_edit["background"] = media
     byte_size_str = f'{img_byte_size / 1024:.2f} kB'
 
     img_mask = None
-    if os.path.exists(mask_path):
+    if mask_path and os.path.exists(mask_path):
         img_mask = Image.open(mask_path)
-    caption_text = dataset.read_caption_at(index)
+    caption_text = dataset.read_caption(index)
 
     # The displayed path is the original path, not the temp one
     path_text = path
 
-    if is_video(path):
-        video_ext = os.path.splitext(path)[1]
+    if item.is_video:
+        video_ext = item.extension
         with tempfile.NamedTemporaryFile(dir=tempfile.gettempdir(), delete=False, suffix=video_ext) as temp_path:
             # Copy video to a temp file to avoid locking issues
             shutil.copy2(path, temp_path.name)
             path = temp_path.name
     out = {
         "index": index,
-        "dataset_size": dataset.size(),
+        "dataset_size": len(dataset),
         "path": path_text,
         "byte_size_str": byte_size_str,
         "dimensions": dimensions,
         "caption_text": caption_text,
-        "img_edit": None if is_video(path) else img_edit,
-        "img_mask": None if is_video(path) else img_mask,
-        "video_display": path if is_video(path) else None
+        "img_edit": None if item.is_video else img_edit,
+        "img_mask": None if item.is_video else img_mask,
+        "video_display": path if item.is_video else None
     }
     print(out)
     return out
@@ -117,7 +119,7 @@ def _navigate_forward_internal(current_index, caption_text, dataset: ImageDataSe
     """Internal helper for navigation during init (before state is set up)."""
     from lib.captioning import save_caption
     save_caption(current_index, caption_text, dataset=dataset)
-    new_index = min(current_index + 1, dataset.size() - 1)
+    new_index = min(current_index + 1, len(dataset) - 1)
     if new_index < 0:
         return None
     # Create a temporary state dict for load_index
@@ -131,11 +133,11 @@ def navigate_forward(current_index, caption_text, state_dict: dict):
     """
     from lib.captioning import save_caption
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized:
+    if dataset is None or not dataset.is_initialized:
         return gr.skip()
 
     save_caption(current_index, caption_text, dataset=dataset)
-    new_index = min(current_index + 1, dataset.size() - 1)
+    new_index = min(current_index + 1, len(dataset) - 1)
     if new_index < 0:
         return gr.skip()
     return to_control_group(load_index(new_index, state_dict))
@@ -148,7 +150,7 @@ def navigate_backward(current_index, caption_text, state_dict: dict):
     """
     from lib.captioning import save_caption
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized:
+    if dataset is None or not dataset.is_initialized:
         return gr.skip()
 
     save_caption(current_index, caption_text, dataset=dataset)
@@ -164,13 +166,11 @@ def toggle_bookmark(current_index, state_dict: dict):
     bookmark_off = "📑"  # symbol when toggled off
 
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized:
+    if dataset is None or not dataset.is_initialized:
         return bookmark_off
 
-    # flip state
-    new_state = not dataset.is_bookmark(current_index)
-    # update dataset
-    dataset.toggle_bookmark(current_index, new_state)
+    # toggle and get new state
+    new_state = dataset.toggle_bookmark(current_index)
     # determine new symbol
     new_symbol = bookmark_on if new_state else bookmark_off
 
@@ -182,7 +182,7 @@ def jump(new_index, caption_text, file_name, state_dict: dict):
     """Jump to a specific index."""
     from lib.captioning import save_caption
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized:
+    if dataset is None or not dataset.is_initialized:
         return gr.skip()
 
     save_caption(-1, caption_text, file_name, dataset=dataset)

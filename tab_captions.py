@@ -4,9 +4,8 @@ import gradio as gr
 import pandas as pd
 
 from typing import List, NamedTuple
-from PIL import Image
 from ui_symbols import process_symbol
-from lib.image_dataset import ImageDataSet, load_media
+from lib.image_dataset import ImageDataSet
 
 
 def _get_dataset(state_dict: dict) -> ImageDataSet | None:
@@ -31,12 +30,12 @@ class CaptionsControls(NamedTuple):
 
 def create_tag_cloud(sort_by: str, state_dict: dict):
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized:
+    if dataset is None or not dataset.is_initialized:
         return gr.CheckboxGroup(label="Tag cloud", choices=[], value=[])
 
     tags = dict()
-    for i in range(0, dataset.size()):
-        for tag in dataset.read_tags_at(i):
+    for i in range(0, len(dataset)):
+        for tag in dataset.read_tags(i):
             if tag not in tags:
                 tags[tag] = 1
             else:
@@ -54,12 +53,12 @@ def create_tag_cloud(sort_by: str, state_dict: dict):
 
 def remove_selected_tags(remove_tags: List, sort_by: str, state_dict: dict):
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized:
+    if dataset is None or not dataset.is_initialized:
         return create_tag_cloud(sort_by, state_dict)
 
     for t in remove_tags:
-        for i in range(0, dataset.size()):
-            tags = dataset.read_tags_at(i)
+        for i in range(0, len(dataset)):
+            tags = dataset.read_tags(i)
 
             # Recreate caption_text by filtering the tags list
             caption_text = ", ".join([x for x in tags if x != t])
@@ -102,11 +101,11 @@ bad_elements = [
 
 def cleanup_tags(sort_by: str, state_dict: dict):
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized:
+    if dataset is None or not dataset.is_initialized:
         return create_tag_cloud(sort_by, state_dict)
 
-    for i in range(0, dataset.size()):
-        tags = dataset.read_tags_at(i)
+    for i in range(0, len(dataset)):
+        tags = dataset.read_tags(i)
         tags = list(dict.fromkeys(tags))
 
         # remove tag if it is a body part
@@ -121,11 +120,11 @@ def cleanup_tags(sort_by: str, state_dict: dict):
 
 def replace_underscores(sort_by: str, state_dict: dict):
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized:
+    if dataset is None or not dataset.is_initialized:
         return create_tag_cloud(sort_by, state_dict)
 
-    for i in range(0, dataset.size()):
-        caption_text = dataset.read_caption_at(i)
+    for i in range(0, len(dataset)):
+        caption_text = dataset.read_caption(i)
         caption_text = caption_text.replace("_", " ")
         dataset.save_caption(i, caption_text)
 
@@ -134,11 +133,11 @@ def replace_underscores(sort_by: str, state_dict: dict):
 
 def append_tag(tag: str, sort_by: str, state_dict: dict):
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized:
+    if dataset is None or not dataset.is_initialized:
         return create_tag_cloud(sort_by, state_dict)
 
-    for i in range(0, dataset.size()):
-        caption_text = dataset.read_caption_at(i)
+    for i in range(0, len(dataset)):
+        caption_text = dataset.read_caption(i)
         if tag not in caption_text:
             caption_text += ", " + tag
             dataset.save_caption(i, caption_text)
@@ -147,11 +146,11 @@ def append_tag(tag: str, sort_by: str, state_dict: dict):
 
 def prepend_tag(tag: str, sort_by: str, state_dict: dict):
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized:
+    if dataset is None or not dataset.is_initialized:
         return create_tag_cloud(sort_by, state_dict)
 
-    for i in range(0, dataset.size()):
-        caption_text = dataset.read_caption_at(i)
+    for i in range(0, len(dataset)):
+        caption_text = dataset.read_caption(i)
         if tag not in caption_text:
             caption_text = tag + ", " + caption_text
             dataset.save_caption(i, caption_text)
@@ -160,7 +159,7 @@ def prepend_tag(tag: str, sort_by: str, state_dict: dict):
 
 def move_to_subdirectory(selected_tags: List[str], inverse: bool, subdir_name: str, state_dict: dict):
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized:
+    if dataset is None or not dataset.is_initialized:
         return "Dataset not initialized."
     if not selected_tags:
         return "No tags selected for moving."
@@ -169,7 +168,7 @@ def move_to_subdirectory(selected_tags: List[str], inverse: bool, subdir_name: s
 
     move_list = []
     def check_relevance(index, img_path, mask_path, caption_path):
-        image_tags = dataset.read_tags_at(index)
+        image_tags = dataset.read_tags(index)
         # if any element of tags is in image_tags, create a gr.Image object
         match = not inverse and any(tag in image_tags for tag in selected_tags)
         inverse_match = inverse and all(tag not in image_tags for tag in selected_tags)
@@ -196,7 +195,7 @@ def move_to_subdirectory(selected_tags: List[str], inverse: bool, subdir_name: s
 
 def create_subdirectory(subdir_name, state_dict: dict):
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized:
+    if dataset is None or not dataset.is_initialized:
         return "Dataset not initialized."
 
     base_dir = dataset.base_dir
@@ -216,21 +215,23 @@ def create_subdirectory(subdir_name, state_dict: dict):
 
 def refresh_thumbnails(tags: list, inverse: bool, state_dict: dict):
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized:
+    if dataset is None or not dataset.is_initialized:
         return [], state_dict
 
     image_controls = []
     state_dict["captions_gallery_mapping"] = {}
     def check_relevance(index, img_path, mask_path, caption_path):
-        image_tags = dataset.read_tags_at(index)
+        image_tags = dataset.read_tags(index)
+        item = dataset.get_item(index)
+        thumbnail = item.thumbnail_path if item else None
         # if any element of tags is in image_tags, create a gr.Image object
         if not inverse and any(tag in image_tags for tag in tags):
             # read image as PIL.Image and add it to the list
-            image_controls.append(dataset.thumbnail_images[index])
+            image_controls.append(thumbnail)
             state_dict["captions_gallery_mapping"][len(image_controls) - 1] = index
         # if inverse mode and none of the elements of tags is in image_tags, create a gr.Image object
         if inverse and all(tag not in image_tags for tag in tags):
-            image_controls.append(dataset.thumbnail_images[index])
+            image_controls.append(thumbnail)
             state_dict["captions_gallery_mapping"][len(image_controls) - 1] = index
 
     dataset.scan(check_relevance)
@@ -239,14 +240,14 @@ def refresh_thumbnails(tags: list, inverse: bool, state_dict: dict):
 
 def caption_search(search_for, replace_with, state_dict: dict):
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized:
+    if dataset is None or not dataset.is_initialized:
         return gr.update(value=pd.DataFrame(columns=["Index", "Caption", "Caption modified"]))
 
     # Compile a case-insensitive regular expression for the search term
     pattern = re.compile(re.escape(search_for), re.IGNORECASE)
     results = []
-    for i in range(0, dataset.size()):
-        caption_text = dataset.read_caption_at(i)
+    for i in range(0, len(dataset)):
+        caption_text = dataset.read_caption(i)
         modified_text = caption_text
         matches = list(pattern.finditer(caption_text))
         for match in reversed(matches):
@@ -263,13 +264,13 @@ def caption_search(search_for, replace_with, state_dict: dict):
 
 def caption_search_and_replace(search_for, replace_with, state_dict: dict):
     dataset = _get_dataset(state_dict)
-    if dataset is None or not dataset.initialized:
+    if dataset is None or not dataset.is_initialized:
         return
 
     # Compile a case-insensitive regular expression for the search term
     pattern = re.compile(re.escape(search_for), re.IGNORECASE)
-    for i in range(0, dataset.size()):
-        caption_text = dataset.read_caption_at(i)
+    for i in range(0, len(dataset)):
+        caption_text = dataset.read_caption(i)
         # Replace all occurrences of the search term with the replacement term
         # while preserving the case of the rest of the caption
         caption_text_mod = pattern.sub(replace_with, caption_text)

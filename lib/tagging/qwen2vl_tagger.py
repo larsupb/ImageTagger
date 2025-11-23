@@ -3,7 +3,6 @@ import torch
 from PIL import Image
 from transformers import Qwen2VLForConditionalGeneration, AutoProcessor, BitsAndBytesConfig
 
-from lib.image_dataset import load_media
 from lib.upscaling.util import scale_to_megapixels
 
 device = "cuda"

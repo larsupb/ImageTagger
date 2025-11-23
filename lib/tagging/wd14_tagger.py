@@ -9,8 +9,6 @@ from PIL import Image
 from huggingface_hub import hf_hub_download
 from onnxruntime import InferenceSession
 
-from lib.image_dataset import load_media
-
 
 # noinspection PyUnresolvedReferences
 def make_square(img, target_size):
