@@ -4,30 +4,38 @@ import gradio as gr
 
 import config
 from lib.captioning import generate_caption, save_caption, TAGGERS
-from lib.image_dataset import INSTANCE as DATASET, load_media
+from lib.image_dataset import ImageDataSet, load_media
 from lib.masking import ask_mask_from_model
 from lib.upscaling import upscale_image
 from tab_editing import process_symbol
 from ui_navigation import load_index
 
 
+def _get_dataset(state_dict: dict) -> ImageDataSet | None:
+    """Helper to extract dataset from state dict."""
+    if state_dict is None:
+        return None
+    return state_dict.get('dataset')
+
+
 def batch_process(rename, rename_offset, upscale, mask, captioning, tagger, state_dict, progress=gr.Progress(track_tqdm=True)):
     log = ""
 
-    if not DATASET.initialized:
+    dataset = _get_dataset(state_dict)
+    if dataset is None or not dataset.initialized:
         raise Exception("Dataset not initialized!")
 
     if rename:
         # create a compressed backup of the dataset
-        DATASET.backup()
+        dataset.backup()
 
-    for i in progress.tqdm(range(0, DATASET.size())):
-        loader_data = load_index(i)
+    for i in progress.tqdm(range(0, dataset.size())):
+        loader_data = load_index(i, state_dict)
         log += "Processing " + loader_data['path'] + "\n"
 
         orig_media = load_media(loader_data['path'])
         if rename:
-            new_path = DATASET.rename_image(i, rename_offset)
+            new_path = dataset.rename_image(i, rename_offset)
             if new_path is not None:
                 log += "Renamed to " + loader_data['path'] + " to  " + new_path + "\n"
                 loader_data['path'] = new_path
@@ -42,19 +50,19 @@ def batch_process(rename, rename_offset, upscale, mask, captioning, tagger, stat
             loader_data['img_edit']['background'] = image
             # TODO: Actually the gradio image component should be updated
             # Remove mask if exists
-            if DATASET.mask_support and loader_data['img_mask'] is not None:
-                mask_path = DATASET.mask_paths(i)
+            if dataset.mask_support and loader_data['img_mask'] is not None:
+                mask_path = dataset.mask_paths(i)
                 if os.path.exists(mask_path):
                     os.remove(mask_path)
                     loader_data['img_mask'] = None
         if mask:
             mask = ask_mask_from_model(orig_media, 'u2net_human_seg')
-            mask.save(DATASET.mask_paths(i))
+            mask.save(dataset.mask_paths(i))
 
         if captioning:
             # TODO: pass media object to captioning
             caption = generate_caption(i, tagger, state_dict)
-            save_caption(i, caption)
+            save_caption(i, caption, dataset=dataset)
 
     return log
 

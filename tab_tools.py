@@ -2,8 +2,15 @@ import os
 
 import gradio as gr
 
-from lib.image_dataset import INSTANCE as DATASET
+from lib.image_dataset import ImageDataSet
 from tab_editing import process_symbol
+
+
+def _get_dataset(state_dict: dict) -> ImageDataSet | None:
+    """Helper to extract dataset from state dict."""
+    if state_dict is None:
+        return None
+    return state_dict.get('dataset')
 
 
 def tab_tools(state: gr.State):
@@ -15,9 +22,10 @@ def tab_tools(state: gr.State):
                 button_copy = gr.Button(value=process_symbol + " Copy", elem_id="button_execute")
             copy_log = gr.Textbox(label="Log", placeholder="Log output", lines=10, interactive=False)
 
-            def process_copy(copy_options, target_directory):
+            def process_copy(copy_options, target_directory, state_dict: dict):
                 log = ""
-                if DATASET.size() == 0:
+                dataset = _get_dataset(state_dict)
+                if dataset is None or not dataset.initialized or dataset.size() == 0:
                     log += "No dataset loaded\n"
                     return log
                 # Check if at least parent directory exists for the target directory
@@ -34,12 +42,12 @@ def tab_tools(state: gr.State):
                         return log
 
                 count = 0
-                for i in range(0, DATASET.size()):
-                    if copy_options == 'Bookmarks only' and not DATASET.is_bookmark(i):
+                for i in range(0, dataset.size()):
+                    if copy_options == 'Bookmarks only' and not dataset.is_bookmark(i):
                         continue
-                    DATASET.copy_media(i, target_directory)
+                    dataset.copy_media(i, target_directory)
                     count += 1
                 log += f"Copied {count} images\n"
                 return log
 
-            button_copy.click(process_copy, inputs=[copy_options, copy_target_directory], outputs=copy_log)
+            button_copy.click(process_copy, inputs=[copy_options, copy_target_directory, state], outputs=copy_log)

@@ -11,7 +11,7 @@ from tab_editing import tab_editing, align_visibility, set_bookmark
 from tab_settings import tab_settings
 from tab_tools import tab_tools
 from tab_validation import tab_validate
-from ui_navigation import init_dataset, load_index, to_control_group
+from ui_navigation import init_dataset, load_index, to_control_group, toggle_bookmark
 from ui_symbols import folder_symbol, process_symbol
 
 js = '''
@@ -79,36 +79,36 @@ if __name__ == '__main__':
             captions_controls = captions_result.controls
             captions_dependency = captions_result.reload_dependency
             gallery_2 = captions_controls.gallery
-            tab_validate()
+            tab_validate(state)
             batch_dependency = tab_batch(state)
             tab_tools(state)
             tab_settings(state)
 
-            def on_gallery_click(data: gr.EventData):
+            def on_gallery_click(data: gr.EventData, state_dict: dict):
                 new_idx = data._data['index']
-                out = (gr.Tabs(selected=1),) + to_control_group(load_index(new_idx))
+                out = (gr.Tabs(selected=1),) + to_control_group(load_index(new_idx, state_dict))
                 return out
 
-            gallery.select(on_gallery_click, inputs=[], outputs=[tabs] + control_output_group). \
+            gallery.select(on_gallery_click, inputs=[state], outputs=[tabs] + control_output_group). \
                then(align_visibility, inputs=[image_editor, video_display], outputs=[image_editor, video_display]). \
-               then(set_bookmark, inputs=[slider], outputs=[button_bookmark])
+               then(set_bookmark, inputs=[slider, state], outputs=[button_bookmark])
 
-            def on_caption_gallery_click(data: gr.EventData, state: dict):
+            def on_caption_gallery_click(data: gr.EventData, state_dict: dict):
                 new_idx = data._data['index']
-                if 'captions_gallery_mapping' in state:
-                    new_idx = state['captions_gallery_mapping'][new_idx]
-                    out = (gr.Tabs(selected=1),) + to_control_group(load_index(new_idx))
+                if 'captions_gallery_mapping' in state_dict:
+                    new_idx = state_dict['captions_gallery_mapping'][new_idx]
+                    out = (gr.Tabs(selected=1),) + to_control_group(load_index(new_idx, state_dict))
                     return out
                 return None
 
             gallery_2.select(on_caption_gallery_click, inputs=[state], outputs=[tabs] + control_output_group). \
                then(align_visibility, inputs=[image_editor, video_display], outputs=[image_editor, video_display]). \
-               then(set_bookmark, inputs=[slider], outputs=[button_bookmark])
+               then(set_bookmark, inputs=[slider, state], outputs=[button_bookmark])
 
         button_load_ds.click(init_dataset,
                              inputs=[input_folder_path, mask_folder_path,
                                      cb_only_missing_captions, cb_subdirectories, cb_load_gallery, state],
-                             outputs=[gallery] + control_output_group)
+                             outputs=[gallery] + control_output_group + [state])
 
         # Force reloading the dataset when there were changes made by dependencies (like batch processing)
         for dependency in [captions_dependency, batch_dependency]:
@@ -116,7 +116,7 @@ if __name__ == '__main__':
                 init_dataset,
                 inputs=[input_folder_path, mask_folder_path, cb_only_missing_captions,
                         cb_subdirectories, cb_load_gallery, state],
-                outputs=[gallery] + control_output_group
+                outputs=[gallery] + control_output_group + [state]
             )
 
         def get_history(request: gr.Request):

@@ -6,10 +6,21 @@ import pandas as pd
 from PIL import Image
 
 from lib.image_aspects import ImageAspects
-from lib.image_dataset import INSTANCE as DATASET
+from lib.image_dataset import ImageDataSet
 
 
-def validate_dataset(aspect_ratios=None):
+def _get_dataset(state_dict: dict) -> ImageDataSet | None:
+    """Helper to extract dataset from state dict."""
+    if state_dict is None:
+        return None
+    return state_dict.get('dataset')
+
+
+def validate_dataset(state_dict: dict, aspect_ratios=None):
+    dataset = _get_dataset(state_dict)
+    if dataset is None or not dataset.initialized or dataset.empty():
+        return None
+
     if aspect_ratios is not None and len(aspect_ratios) > 0:
         aspects = [ImageAspects.from_code(a) for a in aspect_ratios]
     else:
@@ -77,13 +88,9 @@ def validate_dataset(aspect_ratios=None):
         # if caption is None or len(caption) == 0:
         #     img_validation['Caption'] = f'Caption is empty!'
 
-
-    if DATASET.empty():
-        return None
-
     validation_results = []
     # Scan the dataset and validate each image
-    DATASET.scan(validate)
+    dataset.scan(validate)
 
     for k, v in bucket_count.items():
         validation_results.append({'Bucket': k, 'Count': v, 'Files': bucket_assignments[k]})

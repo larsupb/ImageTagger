@@ -1,5 +1,6 @@
 import os
 
+import PIL
 import gradio as gr
 import numpy as np
 from PIL import Image
@@ -8,6 +9,7 @@ from typing import NamedTuple
 
 import config
 from lib.captioning import generate_caption, TAGGERS
+from lib.image_dataset import ImageDataSet
 from lib.masking import remove_background, ask_mask_from_model
 from lib.upscaling import Upscalers, upscale_image
 from ui_navigation import load_index, navigate_forward, jump, navigate_backward, to_control_group, toggle_bookmark
@@ -23,7 +25,12 @@ forward_symbol = u'\u25B6'
 bookmark_on = "🔖"  # symbol when toggled on
 bookmark_off = "📑"
 
-from lib.image_dataset import INSTANCE as DATASET
+
+def _get_dataset(state_dict: dict) -> ImageDataSet | None:
+    """Helper to extract dataset from state dict."""
+    if state_dict is None:
+        return None
+    return state_dict.get('dataset')
 
 
 class EditingControls(NamedTuple):
@@ -39,26 +46,34 @@ class EditingControls(NamedTuple):
     bookmark_button: gr.Button
 
 
-def delete_image(current_index):
-    if current_index > -1:
-        DATASET.delete_image(current_index)
+def delete_image(current_index, state_dict: dict):
+    dataset = _get_dataset(state_dict)
+    if dataset is None or not dataset.initialized:
+        return gr.skip()
 
-    images_total = DATASET.size()
+    if current_index > -1:
+        dataset.delete_image(current_index)
+
+    images_total = dataset.size()
     if current_index > images_total - 1:
         current_index = max(current_index - 1, 0)
 
     slider_new = gr.Slider(value=current_index, minimum=0, maximum=images_total, label="Image index", step=1,
                            interactive=True)
     # open and rescale images to 0.5 megapixels
-    gallery = gr.Gallery(value=DATASET.thumbnail_images, allow_preview=False, preview=False, columns=8, type="pil")
+    gallery = gr.Gallery(value=dataset.thumbnail_images, allow_preview=False, preview=False, columns=8, type="pil")
 
-    loader_data = load_index(current_index)
+    loader_data = load_index(current_index, state_dict)
     return gallery, slider_new, *list(loader_data.values())[1:]
 
 
 def upscale_image_action(img_index: int, image_dict: EditorValue, state_dict: dict, upscaler_name: str,
                          progress=gr.Progress()) -> EditorValue:
-    img = DATASET.media_paths[img_index]
+    dataset = _get_dataset(state_dict)
+    if dataset is None or not dataset.initialized:
+        return image_dict
+
+    img = dataset.media_paths[img_index]
     img_out = upscale_image(img, upscaler_name, state_dict,
                             target_megapixels=config.upscale_target_megapixels(state_dict),
                             max_current_megapixels=config.upscale_target_megapixels(state_dict), progress=progress)
@@ -68,8 +83,12 @@ def upscale_image_action(img_index: int, image_dict: EditorValue, state_dict: di
     return image_dict
 
 
-def upscale_image_restore_action(index, image_dict: EditorValue) -> EditorValue:
-    img = Image.open(DATASET.media_paths[index])
+def upscale_image_restore_action(index, image_dict: EditorValue, state_dict: dict) -> EditorValue:
+    dataset = _get_dataset(state_dict)
+    if dataset is None or not dataset.initialized:
+        return image_dict
+
+    img = Image.open(dataset.media_paths[index])
     image_dict['background'] = img
     return image_dict
 
@@ -80,17 +99,18 @@ def remove_background_action(image_dict, state_dict) -> EditorValue:
     return image_dict
 
 
-def generate_mask(index, image_dict: EditorValue) -> EditorValue:
-    if not DATASET.initialized or not DATASET.mask_support:
+def generate_mask(index, image_dict: EditorValue, state_dict: dict) -> EditorValue:
+    dataset = _get_dataset(state_dict)
+    if dataset is None or not dataset.initialized or not dataset.mask_support:
         return EditorValue(background=None, layers=[], composite=None)
 
     # Use current editor background to maintain alignment with any modifications (e.g., upscaling)
     img = image_dict.get('background')
     if img is None:
-        img = Image.open(DATASET.media_paths[index])
+        img = Image.open(dataset.media_paths[index])
 
     # Load or generate mask
-    mask_path = DATASET.mask_paths(index)
+    mask_path = dataset.mask_paths(index)
     if os.path.exists(mask_path):
         mask = Image.open(mask_path)
     else:
@@ -103,15 +123,21 @@ def generate_mask(index, image_dict: EditorValue) -> EditorValue:
     return EditorValue(background=img, layers=[mask], composite=None)
 
 
-def save_mask_action(index, editor_value: EditorValue):
-    if not DATASET.initialized or not DATASET.mask_support:
+def save_mask_action(index, editor_value: EditorValue, state_dict: dict):
+    dataset = _get_dataset(state_dict)
+    if dataset is None or not dataset.initialized or not dataset.mask_support:
         return None
     if editor_value["layers"] is not None:
-        img_data = editor_value["layers"][0]
-        img_data = img_data.convert('RGB')
-        print('Saving ', DATASET.mask_paths(index))
-        img_data.save(DATASET.mask_paths(index))
-        return img_data
+        mask = editor_value["layers"][0]
+        mask = mask.convert('RGB')
+
+        print('Saving ', dataset.mask_paths(index))
+        # The size of the mask must match the size of the image.
+        # So read the image gather its size, resize the mask and save it
+        img_orig: PIL.Image = Image.open(dataset.media_paths[index])
+        mask.resize(img_orig.size, resample=Image.Resampling.NEAREST)
+        mask.save(dataset.mask_paths(index))
+        return mask
     return None
 
 
@@ -129,11 +155,15 @@ def apply_mask_action(mask, image_dict: EditorValue):
 
 
 def save_image_action(index, state_dict):
-    if state_dict["image_upscaled"] and state_dict["image_upscaled_index"] == index:
-        img = state_dict["image_upscaled"]
-        DATASET.update_image(index, img)
+    dataset = _get_dataset(state_dict)
+    if dataset is None or not dataset.initialized:
+        return gr.skip()
 
-    return to_control_group(load_index(index))
+    if state_dict.get("image_upscaled") and state_dict.get("image_upscaled_index") == index:
+        img = state_dict["image_upscaled"]
+        dataset.update_image(index, img)
+
+    return to_control_group(load_index(index, state_dict))
 
 
 def align_visibility(image_editor, video_display):
@@ -148,11 +178,17 @@ def align_visibility(image_editor, video_display):
     else:
         return gr.update(visible=True), gr.update(visible=False)
 
-def set_bookmark(index):
-    if DATASET.is_bookmark(index):
+
+def set_bookmark(index, state_dict: dict):
+    dataset = _get_dataset(state_dict)
+    if dataset is None or not dataset.initialized:
+        return gr.update(value=bookmark_off)
+
+    if dataset.is_bookmark(index):
         return gr.update(value=bookmark_on)
     else:
         return gr.update(value=bookmark_off)
+
 
 def tab_editing(state: gr.State, gallery: gr.Gallery):
     with gr.Tab(id=1, label="Edit"):
@@ -210,33 +246,35 @@ def tab_editing(state: gr.State, gallery: gr.Gallery):
     control_output_group = [slider, textbox_images_total, textbox_image_path, textbox_image_size,
                              textbox_image_dimensions, textbox_caption, image_editor, image_mask_preview, video_display]
 
-    slider.input(jump, inputs=[slider, textbox_caption, textbox_image_path], outputs=control_output_group).\
+    # Navigation handlers - now include state
+    slider.input(jump, inputs=[slider, textbox_caption, textbox_image_path, state], outputs=control_output_group).\
         then(align_visibility, inputs=[image_editor, video_display], outputs=[image_editor, video_display]).\
-        then(set_bookmark, inputs=[slider], outputs=[button_bookmark])
+        then(set_bookmark, inputs=[slider, state], outputs=[button_bookmark])
 
-    button_bookmark.click(toggle_bookmark, inputs=[slider], outputs=[button_bookmark])
+    button_bookmark.click(toggle_bookmark, inputs=[slider, state], outputs=[button_bookmark])
 
-    button_backward.click(navigate_backward, inputs=[slider, textbox_caption], outputs=control_output_group).\
+    button_backward.click(navigate_backward, inputs=[slider, textbox_caption, state], outputs=control_output_group).\
         then(align_visibility, inputs=[image_editor, video_display], outputs=[image_editor, video_display]).\
-        then(set_bookmark, inputs=[slider], outputs=[button_bookmark])
-    button_forward.click(navigate_forward, inputs=[slider, textbox_caption], outputs=control_output_group).\
+        then(set_bookmark, inputs=[slider, state], outputs=[button_bookmark])
+    button_forward.click(navigate_forward, inputs=[slider, textbox_caption, state], outputs=control_output_group).\
         then(align_visibility, inputs=[image_editor, video_display], outputs=[image_editor, video_display]).\
-        then(set_bookmark, inputs=[slider], outputs=[button_bookmark])
-    button_delete.click(delete_image, inputs=[slider], outputs=[gallery] + control_output_group).\
+        then(set_bookmark, inputs=[slider, state], outputs=[button_bookmark])
+    button_delete.click(delete_image, inputs=[slider, state], outputs=[gallery] + control_output_group).\
         then(align_visibility, inputs=[image_editor, video_display], outputs=[image_editor, video_display]).\
-        then(set_bookmark, inputs=[slider], outputs=[button_bookmark])
+        then(set_bookmark, inputs=[slider, state], outputs=[button_bookmark])
 
-
+    # Caption and image operations
     button_generate_caption.click(generate_caption, inputs=[slider, radio_engine, state], outputs=textbox_caption)
     button_upscale.click(upscale_image_action, inputs=[slider, image_editor, state, dropdown_upscaler], outputs=image_editor)
-    button_upscale_restore.click(upscale_image_restore_action, inputs=[slider, image_editor], outputs=image_editor)
+    button_upscale_restore.click(upscale_image_restore_action, inputs=[slider, image_editor, state], outputs=image_editor)
 
     button_remove_background.click(remove_background_action, inputs=[image_editor, state], outputs=image_editor)
     button_save_image.click(save_image_action, inputs=[slider, state], outputs=control_output_group)
 
+    # Mask operations - now include state
     button_apply_mask.click(apply_mask_action, inputs=[image_mask_preview, image_editor], outputs=image_editor)
-    button_generate_mask.click(generate_mask, inputs=[slider, image_editor], outputs=image_editor, show_progress="full")
-    button_save_mask.click(save_mask_action, inputs=[slider, image_editor], outputs=image_mask_preview,
+    button_generate_mask.click(generate_mask, inputs=[slider, image_editor, state], outputs=image_editor, show_progress="full")
+    button_save_mask.click(save_mask_action, inputs=[slider, image_editor, state], outputs=image_mask_preview,
                            show_progress="full")
 
     return EditingControls(

@@ -1,5 +1,5 @@
 import gradio as gr
-from lib.image_dataset import INSTANCE as DATASET, load_media
+from lib.image_dataset import ImageDataSet, load_media
 
 # Define CSS for a responsive grid layout
 custom_css = """
@@ -17,7 +17,15 @@ custom_css = """
 </style>
 """
 
-def checkable_gallery():
+
+def _get_dataset(state_dict: dict) -> ImageDataSet | None:
+    """Helper to extract dataset from state dict."""
+    if state_dict is None:
+        return None
+    return state_dict.get('dataset')
+
+
+def checkable_gallery(state: gr.State):
     # Function to load images from paths
     def load_images(paths):
         return [load_media(path) for path in paths]
@@ -65,10 +73,14 @@ def checkable_gallery():
             checkbox.change(fn=update_checked_images, inputs=checkboxes, outputs=checked_ids_output)
 
         # Define button to refresh the gallery
-        def refresh_gallery():
+        def refresh_gallery(state_dict: dict):
+            dataset = _get_dataset(state_dict)
+            if dataset is None or not dataset.initialized:
+                return checked_ids_output
+
             # Update the image paths or reload them dynamically if needed
             nonlocal images
-            images = load_images(DATASET.media_paths)  # or set image_paths to new paths if dynamic
+            images = load_images(dataset.media_paths)  # or set image_paths to new paths if dynamic
 
             # Re-render the gallery with the new images
             render_gallery()
@@ -76,7 +88,7 @@ def checkable_gallery():
 
         # Button to trigger gallery refresh
         refresh_button = gr.Button("Reload Gallery")
-        refresh_button.click(refresh_gallery, outputs=[gallery_rows, checked_ids_output])
+        refresh_button.click(refresh_gallery, inputs=[state], outputs=[gallery_rows, checked_ids_output])
 
     # Return the component and the output
     return gallery_component, checked_ids_output, refresh_button

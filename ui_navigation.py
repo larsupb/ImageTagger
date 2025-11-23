@@ -8,46 +8,61 @@ import gradio as gr
 from PIL import Image
 
 import config
-from lib.captioning import save_caption
-from lib.image_dataset import INSTANCE as DATASET, load_media, is_video
+from lib.image_dataset import ImageDataSet, load_media, is_video
 
 
 def init_dataset(path: str, masks_path: str, filter_missing_captions: bool, subdirectories: bool, load_gallery: bool, state_dict: dict):
     """
-    Initialize the dataset and load the first image
+    Initialize the dataset and load the first image.
+    Creates a new ImageDataSet instance and stores it in state_dict.
+
     :param path: Path to the image dataset
     :param masks_path: Path to the masks dataset
     :param filter_missing_captions: If True, images without captions will be filtered out
     :param subdirectories: If True, images will be loaded from subdirectories
     :param load_gallery: If True, the gallery will be loaded
-    :param state_dict: State dictionary
-    :return: gallery, slider, loader_data (-- skip index) [dataset_size, path, byte_size_str, dimensions, caption_text, img_edit, img_mask]
+    :param state_dict: State dictionary - will contain 'dataset' key after init
+    :return: gallery, slider, loader_data (-- skip index), state_dict
     """
-    DATASET.prune(path, subdirectories)
-    DATASET.load(path, masks_path, filter_missing_captions, config.ignore_list(state_dict), subdirectories, load_gallery)
+    # Create new dataset instance for this session
+    dataset = ImageDataSet()
+    dataset.prune(path, subdirectories)
+    dataset.load(path, masks_path, filter_missing_captions, config.ignore_list(state_dict), subdirectories, load_gallery)
 
-    if DATASET.size() == 0:
+    # Store dataset in state for per-session access
+    state_dict['dataset'] = dataset
+
+    if dataset.size() == 0:
         return gr.skip()
 
-    loader_data = navigate_forward(-1, None)
-    images_total = DATASET.size() - 1
+    loader_data = _navigate_forward_internal(-1, None, dataset)
+    images_total = dataset.size() - 1
     slider_new = gr.Slider(value=0, minimum=0, maximum=images_total, label="Image index", step=1, interactive=True)
 
-    gallery = gr.Gallery(value=DATASET.thumbnail_images if load_gallery else [], allow_preview=False, preview=False, columns=8, type="pil")
-    return gallery, slider_new, *list(loader_data[1:])
+    gallery = gr.Gallery(value=dataset.thumbnail_images if load_gallery else [], allow_preview=False, preview=False, columns=8, type="pil")
+    return gallery, slider_new, *list(loader_data[1:]), state_dict
 
 
-def load_index(index) -> dict:
+def _get_dataset(state_dict: dict) -> ImageDataSet | None:
+    """Helper to extract dataset from state dict."""
+    if state_dict is None:
+        return None
+    return state_dict.get('dataset')
+
+
+def load_index(index, state_dict: dict) -> dict:
     """
     Load the image at the given index
-    :param index:
+    :param index: Image index to load
+    :param state_dict: State dictionary containing 'dataset' key
     :return: dictionary contains index, dataset_size, path, byte_size_str, dimensions, caption_text, img_edit, img_mask
     """
-    if index < 0:
+    dataset = _get_dataset(state_dict)
+    if index < 0 or dataset is None or not dataset.initialized:
         return {}
 
-    path = DATASET.media_paths[index]
-    mask_path = DATASET.mask_paths(index)
+    path = dataset.media_paths[index]
+    mask_path = dataset.mask_paths(index)
 
     img_edit = dict()
     img_edit["composite"] = None
@@ -72,7 +87,7 @@ def load_index(index) -> dict:
     img_mask = None
     if os.path.exists(mask_path):
         img_mask = Image.open(mask_path)
-    caption_text = DATASET.read_caption_at(index)
+    caption_text = dataset.read_caption_at(index)
 
     # The displayed path is the original path, not the temp one
     path_text = path
@@ -85,7 +100,7 @@ def load_index(index) -> dict:
             path = temp_path.name
     out = {
         "index": index,
-        "dataset_size": DATASET.size(),
+        "dataset_size": dataset.size(),
         "path": path_text,
         "byte_size_str": byte_size_str,
         "dimensions": dimensions,
@@ -98,46 +113,80 @@ def load_index(index) -> dict:
     return out
 
 
-def navigate_forward(current_index, caption_text):
+def _navigate_forward_internal(current_index, caption_text, dataset: ImageDataSet):
+    """Internal helper for navigation during init (before state is set up)."""
+    from lib.captioning import save_caption
+    save_caption(current_index, caption_text, dataset=dataset)
+    new_index = min(current_index + 1, dataset.size() - 1)
+    if new_index < 0:
+        return None
+    # Create a temporary state dict for load_index
+    temp_state = {'dataset': dataset}
+    return to_control_group(load_index(new_index, temp_state))
+
+
+def navigate_forward(current_index, caption_text, state_dict: dict):
     """
     Save the caption and load the next image
     """
-    save_caption(current_index, caption_text)
-    new_index = min(current_index + 1, DATASET.size() - 1)
+    from lib.captioning import save_caption
+    dataset = _get_dataset(state_dict)
+    if dataset is None or not dataset.initialized:
+        return gr.skip()
+
+    save_caption(current_index, caption_text, dataset=dataset)
+    new_index = min(current_index + 1, dataset.size() - 1)
     if new_index < 0:
-        return
-    return to_control_group(load_index(new_index))
+        return gr.skip()
+    return to_control_group(load_index(new_index, state_dict))
 
 
-def navigate_backward(current_index, caption_text):
+def navigate_backward(current_index, caption_text, state_dict: dict):
     """
     Save the caption and load the previous image
     Does not return components like gallery or slider
     """
-    save_caption(current_index, caption_text)
+    from lib.captioning import save_caption
+    dataset = _get_dataset(state_dict)
+    if dataset is None or not dataset.initialized:
+        return gr.skip()
+
+    save_caption(current_index, caption_text, dataset=dataset)
     new_index = max(current_index - 1, 0)
     if new_index < 0:
-        return
-    return to_control_group(load_index(new_index))
+        return gr.skip()
+    return to_control_group(load_index(new_index, state_dict))
 
 
-def toggle_bookmark(current_index):
+def toggle_bookmark(current_index, state_dict: dict):
+    """Toggle bookmark status for an image."""
     bookmark_on = "🔖"  # symbol when toggled on
     bookmark_off = "📑"  # symbol when toggled off
 
+    dataset = _get_dataset(state_dict)
+    if dataset is None or not dataset.initialized:
+        return bookmark_off
+
     # flip state
-    new_state = not DATASET.is_bookmark(current_index)
+    new_state = not dataset.is_bookmark(current_index)
     # update dataset
-    DATASET.toggle_bookmark(current_index, new_state)
+    dataset.toggle_bookmark(current_index, new_state)
     # determine new symbol
     new_symbol = bookmark_on if new_state else bookmark_off
 
     # Change bookmark button state
     return new_symbol
 
-def jump(new_index, caption_text, file_name):
-    save_caption(-1, caption_text, file_name)
-    return to_control_group(load_index(new_index))
+
+def jump(new_index, caption_text, file_name, state_dict: dict):
+    """Jump to a specific index."""
+    from lib.captioning import save_caption
+    dataset = _get_dataset(state_dict)
+    if dataset is None or not dataset.initialized:
+        return gr.skip()
+
+    save_caption(-1, caption_text, file_name, dataset=dataset)
+    return to_control_group(load_index(new_index, state_dict))
 
 
 def to_control_group(nav_data: dict) -> tuple:

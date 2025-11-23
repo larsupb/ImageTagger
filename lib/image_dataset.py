@@ -150,12 +150,12 @@ def load_media(path, max_frames=32, step=2, duration=100, size=128) -> str | Non
 
 
 class ImageDataSet:
-    _instance = None
+    """
+    Manages an image/video dataset with captions, masks, and thumbnails.
 
-    def __new__(cls, *args, **kwargs):
-        if not cls._instance:
-            cls._instance = super(ImageDataSet, cls).__new__(cls, *args, **kwargs)
-        return cls._instance
+    This class is designed to be instantiated per-session and stored in gr.State
+    for multi-user Gradio deployments.
+    """
 
     def __init__(self):
         self.base_dir: str = ""
@@ -374,4 +374,6 @@ class ImageDataSet:
         if os.path.exists(self.caption_paths[index]):
             shutil.copy2(self.caption_paths[index], target_directory)
 
-INSTANCE = ImageDataSet()
+# Note: The singleton INSTANCE has been removed.
+# ImageDataSet instances should now be created per-session and stored in gr.State.
+# This enables proper multi-user support in Gradio deployments.
