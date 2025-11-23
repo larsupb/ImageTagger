@@ -190,6 +190,67 @@ def set_bookmark(index, state_dict: dict):
         return gr.update(value=bookmark_off)
 
 
+def start_rename(index, state_dict: dict):
+    """Start rename mode: show the filename in an editable textbox."""
+    dataset = _get_dataset(state_dict)
+    if dataset is None or not dataset.initialized:
+        return gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip()
+
+    current_path = dataset.media_paths[index]
+    # Extract filename without extension
+    filename = os.path.splitext(os.path.basename(current_path))[0]
+
+    return (
+        gr.update(visible=False),  # Hide path textbox
+        gr.update(value=filename, visible=True),  # Show rename textbox with current name
+        gr.update(visible=False),  # Hide Rename button
+        gr.update(visible=True),   # Show Save button
+        gr.update(visible=True),   # Show Cancel button
+    )
+
+
+def execute_rename(index, new_name, state_dict: dict):
+    """Execute the rename and return to normal view."""
+    dataset = _get_dataset(state_dict)
+    if dataset is None or not dataset.initialized:
+        return gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip()
+
+    success, message, new_path = dataset.rename_image_to(index, new_name)
+
+    if success:
+        display_path = new_path
+        gr.Info(message)
+    else:
+        # Show error in path textbox temporarily
+        display_path = f"Error: {message}"
+        gr.Warning(message)
+
+    return (
+        gr.update(value=display_path, visible=True),  # Show path textbox with result
+        gr.update(visible=False),  # Hide rename textbox
+        gr.update(visible=True),   # Show Rename button
+        gr.update(visible=False),  # Hide Save button
+        gr.update(visible=False),  # Hide Cancel button
+    )
+
+
+def cancel_rename(index, state_dict: dict):
+    """Cancel rename mode and restore original path display."""
+    dataset = _get_dataset(state_dict)
+    if dataset is None or not dataset.initialized:
+        return gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip()
+
+    current_path = dataset.media_paths[index]
+
+    return (
+        gr.update(value=current_path, visible=True),  # Show path textbox with original
+        gr.update(visible=False),  # Hide rename textbox
+        gr.update(visible=True),   # Show Rename button
+        gr.update(visible=False),  # Hide Save button
+        gr.update(visible=False),  # Hide Cancel button
+    )
+
+
 def tab_editing(state: gr.State, gallery: gr.Gallery):
     with gr.Tab(id=1, label="Edit"):
         with gr.Row():
@@ -198,11 +259,18 @@ def tab_editing(state: gr.State, gallery: gr.Gallery):
             button_bookmark = gr.Button(value=bookmark_off, elem_id='open_folder_small')
             button_backward = gr.Button(value=backward_symbol, elem_id='open_folder_small')
             button_forward = gr.Button(value=forward_symbol, elem_id='open_folder_small')
-            button_delete = gr.Button(value=delete_symbol, elem_id='open_folder_small')
 
         with gr.Row():
             with gr.Column():
-                textbox_image_path = gr.Textbox(interactive=False, label="Image path")
+                with gr.Row():
+                    with gr.Column(scale=10):
+                        textbox_image_path = gr.Textbox(interactive=False, label="Image path")
+                        textbox_rename = gr.Textbox(visible=False, label="New filename")
+                    with gr.Column(scale=1, min_width=100):
+                        button_rename = gr.Button(value="Rename", elem_id='rename_btn')
+                        button_rename_save = gr.Button(value="Save", elem_id='rename_btn', visible=False)
+                        button_rename_cancel = gr.Button(value="Cancel", elem_id='rename_btn', visible=False)
+                        button_delete = gr.Button(value="Delete", elem_id='rename_btn')
             with gr.Column():
                 with gr.Row():
                     textbox_image_size = gr.Textbox(interactive=False, label="Size")
@@ -276,6 +344,12 @@ def tab_editing(state: gr.State, gallery: gr.Gallery):
     button_generate_mask.click(generate_mask, inputs=[slider, image_editor, state], outputs=image_editor, show_progress="full")
     button_save_mask.click(save_mask_action, inputs=[slider, image_editor, state], outputs=image_mask_preview,
                            show_progress="full")
+
+    # Rename operations
+    rename_ui_components = [textbox_image_path, textbox_rename, button_rename, button_rename_save, button_rename_cancel]
+    button_rename.click(start_rename, inputs=[slider, state], outputs=rename_ui_components)
+    button_rename_save.click(execute_rename, inputs=[slider, textbox_rename, state], outputs=rename_ui_components)
+    button_rename_cancel.click(cancel_rename, inputs=[slider, state], outputs=rename_ui_components)
 
     return EditingControls(
         slider=slider,

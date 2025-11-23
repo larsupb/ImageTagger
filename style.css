@@ -32,3 +32,7 @@
     width: 33%;
     flex-grow: 0;
 }
+
+#rename_btn {
+    width: 100px;
+}

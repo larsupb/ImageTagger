@@ -301,6 +301,75 @@ class ImageDataSet:
             extension = '.jpg'
         return extension
 
+    def rename_image_to(self, current_index, new_name):
+        """
+        Rename an image to a user-specified name (without extension).
+        Also renames associated caption and mask files.
+
+        Args:
+            current_index: Index of the image in the dataset
+            new_name: New filename without extension
+
+        Returns:
+            tuple: (success: bool, message: str, new_path: str or None)
+        """
+        if not self.initialized or current_index < 0 or current_index >= len(self.media_paths):
+            return False, "Dataset not initialized or invalid index", None
+
+        # Validate filename
+        new_name = new_name.strip()
+        if not new_name:
+            return False, "Filename cannot be empty", None
+
+        # Check for invalid characters
+        invalid_chars = '/\\:*?"<>|'
+        if any(c in new_name for c in invalid_chars):
+            return False, f"Filename contains invalid characters: {invalid_chars}", None
+
+        current_path = self.media_paths[current_index]
+        parent_dir = os.path.dirname(current_path)
+        extension = self.curate_file_extension(current_index)
+
+        new_image_path = os.path.join(parent_dir, new_name + extension)
+        new_caption_path = img_to_caption_path(new_image_path)
+
+        # Check if target already exists (and it's not the same file)
+        if os.path.exists(new_image_path) and new_image_path != current_path:
+            return False, "A file with this name already exists", None
+
+        # If renaming to the same name, just return success
+        if new_image_path == current_path:
+            return True, "No changes made", new_image_path
+
+        try:
+            # Rename the image file
+            os.rename(current_path, new_image_path)
+
+            # Rename caption file if it exists
+            old_caption_path = self.caption_paths[current_index]
+            if os.path.exists(old_caption_path):
+                os.rename(old_caption_path, new_caption_path)
+
+            # Rename mask file if it exists
+            if self.mask_support:
+                old_mask_path = self.mask_paths(current_index)
+                new_mask_path = img_to_mask_path(new_image_path, self.masks_path)
+                if os.path.exists(old_mask_path):
+                    os.rename(old_mask_path, new_mask_path)
+
+            # Update caption_texts dict if the old path was cached
+            if old_caption_path in self.caption_texts:
+                self.caption_texts[new_caption_path] = self.caption_texts.pop(old_caption_path)
+
+            # Update internal paths
+            self.media_paths[current_index] = new_image_path
+            self.caption_paths[current_index] = new_caption_path
+
+            return True, "File renamed successfully", new_image_path
+
+        except OSError as e:
+            return False, f"Error renaming file: {str(e)}", None
+
     def scan(self, func):
         if not self.initialized:
             raise Exception("Dataset not initialized!")
