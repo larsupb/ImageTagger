@@ -46,13 +46,25 @@ class EditingControls(NamedTuple):
     bookmark_button: gr.Button
 
 
-def delete_image(current_index, state_dict: dict):
+def delete_image(current_index, state_dict: dict, confirmed: bool):
     dataset = _get_dataset(state_dict)
     if dataset is None or not dataset.is_initialized:
         return gr.skip()
 
+    # If not confirmed, skip the deletion
+    if not confirmed:
+        gr.Info("Deletion cancelled")
+        return gr.skip()
+
     if current_index > -1:
-        dataset.delete_item(current_index)
+        item = dataset.get_item(current_index)
+        item_path = item.media_path if item else "Unknown"
+        try:
+            dataset.delete_item(current_index)
+            gr.Info(f"Successfully deleted: {os.path.basename(item_path)}")
+        except Exception as e:
+            gr.Error(f"Failed to delete image: {str(e)}")
+            return gr.skip()
 
     images_total = len(dataset)
     if current_index > images_total - 1:
@@ -348,9 +360,27 @@ def tab_editing(state: gr.State, gallery: gr.Gallery):
     button_forward.click(navigate_forward, inputs=[slider, textbox_caption, state], outputs=control_output_group).\
         then(align_visibility, inputs=[image_editor, video_display], outputs=[image_editor, video_display]).\
         then(set_bookmark, inputs=[slider, state], outputs=[button_bookmark])
-    button_delete.click(delete_image, inputs=[slider, state], outputs=[gallery] + control_output_group).\
-        then(align_visibility, inputs=[image_editor, video_display], outputs=[image_editor, video_display]).\
-        then(set_bookmark, inputs=[slider, state], outputs=[button_bookmark])
+
+    # Delete with confirmation dialog
+    confirm_delete_state = gr.State(value=False)
+    button_delete.click(
+        fn=lambda: True,
+        inputs=None,
+        outputs=confirm_delete_state,
+        js="() => confirm('Are you sure you want to delete this image? This action cannot be undone.')"
+    ).then(
+        delete_image,
+        inputs=[slider, state, confirm_delete_state],
+        outputs=[gallery] + control_output_group
+    ).then(
+        align_visibility,
+        inputs=[image_editor, video_display],
+        outputs=[image_editor, video_display]
+    ).then(
+        set_bookmark,
+        inputs=[slider, state],
+        outputs=[button_bookmark]
+    )
 
     # Caption and image operations
     button_generate_caption.click(generate_caption, inputs=[slider, radio_engine, state], outputs=textbox_caption)
