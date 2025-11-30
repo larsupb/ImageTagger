@@ -1,7 +1,8 @@
 import os
 import requests
 from enum import Enum
-from PIL.Image import Image
+from PIL import Image
+from typing import Union
 
 import config
 from lib.upscaling.util import scale_to_megapixels
@@ -21,9 +22,13 @@ class Upscalers(Enum):
                                   'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth')
 
 
-def upscale_image(img: Image, upscaler_name:str, state_dict: dict, progress=None,
-                  max_current_megapixels=1., target_megapixels=2.) -> Image:
+def upscale_image(img: Union[Image.Image, str], upscaler_name:str, state_dict: dict, progress=None,
+                  max_current_megapixels=1., target_megapixels=2.) -> Image.Image:
     from .spandrel_upscaler import upscale_image_spandrel
+
+    # Load image from path if a string is provided
+    if isinstance(img, str):
+        img = Image.open(img)
 
     # skip if image is too large
     if img.width * img.height > max_current_megapixels * 1_000_000:
